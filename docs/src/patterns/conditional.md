@@ -68,6 +68,56 @@ Pipeline::new(broker)
 - Both branches produce the same output type (`ScanResult`), so the pipeline can continue.
 - If the branches need different output types, wrap them in an enum and let the next task handle it the same way.
 
+## Partitioning items by type
+
+A common variant: a fan-out produces items of different categories, and you want to process each category differently. The same enum pattern applies, but inside the per-item task:
+
+```rust
+#[derive(Serialize, Deserialize)]
+enum Asset {
+    WebApp(WebAppData),
+    Api(ApiData),
+    DnsRecord(DnsData),
+}
+
+#[derive(Serialize, Deserialize)]
+struct AssetResult { /* ... */ }
+
+struct ProcessAsset;
+impl Task for ProcessAsset {
+    type Input = Asset;
+    type Output = AssetResult;
+    const NAME: &'static str = "scanner::process_asset";
+}
+```
+
+The handler routes internally:
+
+```rust
+worker.register::<ProcessAsset>(|asset| async move {
+    match asset {
+        Asset::WebApp(data) => scan_webapp(data).await,
+        Asset::Api(data) => scan_api(data).await,
+        Asset::DnsRecord(data) => scan_dns(data).await,
+    }
+});
+```
+
+The pipeline fans out over mixed assets, and each item is routed to the right handler logic:
+
+```rust
+Pipeline::new(broker)
+    .first::<DiscoverAssets>()   // () -> Vec<Asset>
+    .fan_out()
+    .then::<ProcessAsset>()      // Asset -> AssetResult (routes internally)
+    .collect()
+    .then::<AggregateResults>()
+    .dispatch(())
+    .await?;
+```
+
+This is simpler than a pipeline-level partition because the routing happens at runtime inside the task, the type signature stays clean (`Asset -> AssetResult`), and all branches produce the same output type for collect.
+
 ## When you need truly separate pipelines
 
 If two branches have completely different downstream processing (different number of steps, different output types, different fan-out patterns), dispatch them as separate pipelines from within a task:
