@@ -29,7 +29,7 @@
   env.ORCHIS_TEST_REDIS_URL = "redis://127.0.0.1:6399";
 
   enterTest = ''
-    cargo test --workspace
+    cargo llvm-cov --workspace
   '';
 
   treefmt = {
