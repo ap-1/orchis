@@ -916,15 +916,26 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
     }
 
     /// Fetch results for a list of task IDs concurrently.
+    ///
+    /// Called after a barrier fires, so all results are already stored.
+    /// Uses `get_result` instead of `wait_result` to avoid pub/sub
+    /// overhead for data that is already available.
     #[tracing::instrument(skip(self), fields(child_count = task_ids.len()))]
     async fn gather_results(
         &self,
         task_ids: &[String],
     ) -> Result<Vec<serde_json::Value>, PipelineError> {
-        let futs = task_ids.iter().map(|id| async {
-            let result = self.broker.wait_result(id, None).await?;
-            let value: serde_json::Value = serde_json::from_slice(result.expect_data()?)?;
-            Ok::<_, PipelineError>(value)
+        let futs = task_ids.iter().map(|id| {
+            let id = id.clone();
+            async move {
+                let result = self.broker.get_result(&id).await?.ok_or_else(|| {
+                    PipelineError::Internal(format!(
+                        "barrier fired but result missing for task {id}"
+                    ))
+                })?;
+                let value: serde_json::Value = serde_json::from_slice(result.expect_data()?)?;
+                Ok::<_, PipelineError>(value)
+            }
         });
         try_join_all(futs).await
     }
