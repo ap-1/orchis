@@ -13,7 +13,7 @@ impl Task for ScanTarget {
 }
 ```
 
-A future `#[orchis::task]` proc macro would generate this from a function:
+The `orchis-macros` crate provides `#[task]` to generate this from a function:
 
 ```rust
 #[orchis::task("scanner::scan_target")]

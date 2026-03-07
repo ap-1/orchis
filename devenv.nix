@@ -23,6 +23,7 @@
   services.redis = {
     enable = true;
     port = 6399;
+    extraConfig = "save \"\" \nstop-writes-on-bgsave-error no";
   };
 
   env.ORCHIS_TEST_REDIS = "1";

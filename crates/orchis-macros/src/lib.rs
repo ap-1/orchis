@@ -84,10 +84,11 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
+    let vis = &func.vis;
     let expanded = quote! {
         #func
 
-        pub struct #struct_name;
+        #vis struct #struct_name;
 
         impl orchis_core::Task for #struct_name {
             type Input = #input_ty;

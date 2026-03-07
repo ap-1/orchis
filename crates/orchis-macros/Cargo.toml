@@ -11,3 +11,8 @@ proc-macro = true
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full"] }
+
+[dev-dependencies]
+orchis-core = { path = "../orchis-core" }
+serde = { version = "1.0.228", features = ["derive"] }
+tokio = { version = "1.50.0", features = ["rt", "macros"] }

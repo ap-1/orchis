@@ -546,9 +546,12 @@ dependencies = [
 name = "orchis-macros"
 version = "0.1.0"
 dependencies = [
+ "orchis-core",
  "proc-macro2",
  "quote",
+ "serde",
  "syn",
+ "tokio",
 ]
 
 [[package]]
