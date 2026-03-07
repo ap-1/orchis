@@ -1,0 +1,9 @@
+.devenv/
+.devenv.flake.nix
+.pre-commit-config.yaml
+result
+result-*
+.direnv/
+target/
+.env
+.DS_Store
