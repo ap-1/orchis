@@ -1,0 +1,32 @@
+warning: unused import: `std::sync::Arc`
+ --> tests/compile_fail/collect_outside_fan_out.rs:5:5
+  |
+5 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable statement
+  --> tests/compile_fail/collect_outside_fan_out.rs:22:5
+   |
+21 |     let broker = todo!();
+   |                  ------- any code following this expression is unreachable
+22 |     let _ = Pipeline::new(broker).first::<StepA>().collect(); // ERROR: Sequential has no .collect()
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+   |
+   = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+error[E0599]: `Sequential<_, A, B>` is not an iterator
+  --> tests/compile_fail/collect_outside_fan_out.rs:22:52
+   |
+22 |     let _ = Pipeline::new(broker).first::<StepA>().collect(); // ERROR: Sequential has no .collect()
+   |                                                    ^^^^^^^ `Sequential<_, A, B>` is not an iterator
+   |
+  ::: src/builder/sequential.rs
+   |
+   | pub struct Sequential<B: Broker, In, Out> {
+   | ----------------------------------------- doesn't satisfy `Sequential<_, A, B>: Iterator`
+   |
+   = note: the following trait bounds were not satisfied:
+           `Sequential<_, A, B>: Iterator`
+           which is required by `&mut Sequential<_, A, B>: Iterator`
