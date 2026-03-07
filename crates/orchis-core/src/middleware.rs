@@ -582,6 +582,7 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
                     StepOp::Then(then_op) => {
                         return self
                             .dispatch_per_item_continuation(
+                                task_id,
                                 labels,
                                 &raw_pipeline,
                                 then_op,
@@ -665,6 +666,7 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
 
     async fn dispatch_per_item_continuation(
         &self,
+        child_id: &str,
         source_labels: &HashMap<String, String>,
         raw_pipeline: &str,
         next_op: &ops::ThenOp,
@@ -694,11 +696,10 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
 
         dispatch_labels.extend(next_op.extra_labels.clone());
 
-        let child_id = self.broker.generate_id();
         self.broker
             .dispatch(
                 &next_op.task_name,
-                &child_id,
+                child_id,
                 result.expect_data()?.clone(),
                 dispatch_labels,
             )

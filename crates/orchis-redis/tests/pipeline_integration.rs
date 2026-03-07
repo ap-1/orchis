@@ -21,8 +21,10 @@ fn should_run() -> bool {
 fn test_config() -> RedisConfig {
     let url = std::env::var("ORCHIS_TEST_REDIS_URL")
         .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
+    let id = uuid::Uuid::new_v4();
     let mut config = RedisConfig::new(url);
-    config.key_prefix = format!("orchis_test:{}", uuid::Uuid::new_v4());
+    config.key_prefix = format!("orchis_test:{id}");
+    config.queue_name = format!("orchis_test:queue:{id}");
     config
 }
 
@@ -96,6 +98,41 @@ impl Task for FailOnce {
     const NAME: &'static str = "pipeline_test::fail_once";
 }
 
+struct ProduceEmpty;
+impl Task for ProduceEmpty {
+    type Input = ();
+    type Output = Vec<Num>;
+    const NAME: &'static str = "pipeline_test::produce_empty";
+}
+
+struct DoubleBatch;
+impl Task for DoubleBatch {
+    type Input = Vec<Num>;
+    type Output = Vec<Num>;
+    const NAME: &'static str = "pipeline_test::double_batch";
+}
+
+struct Reducer;
+impl Task for Reducer {
+    type Input = (Num, Num);
+    type Output = Num;
+    const NAME: &'static str = "pipeline_test::reducer";
+}
+
+struct FlatExpand;
+impl Task for FlatExpand {
+    type Input = Num;
+    type Output = Vec<Num>;
+    const NAME: &'static str = "pipeline_test::flat_expand";
+}
+
+struct Noop;
+impl Task for Noop {
+    type Input = Num;
+    type Output = Num;
+    const NAME: &'static str = "pipeline_test::noop";
+}
+
 fn register_all(worker: &mut RedisWorker) {
     worker.register::<Produce, _, _>(|_| async { vec![Num(1), Num(2), Num(3)] });
     worker.register::<Double, _, _>(|n: Num| async move { Num(n.0 * 2) });
@@ -103,6 +140,13 @@ fn register_all(worker: &mut RedisWorker) {
         .register::<Sum, _, _>(|nums: Vec<Num>| async move { Num(nums.iter().map(|n| n.0).sum()) });
     worker.register::<AddTen, _, _>(|n: Num| async move { Num(n.0 + 10) });
     worker.register::<ToNums, _, _>(|n: Num| async move { Nums(vec![n.0, n.0 + 100]) });
+    worker.register::<ProduceEmpty, _, _>(|_| async { vec![] });
+    worker.register::<DoubleBatch, _, _>(|nums: Vec<Num>| async move {
+        nums.iter().map(|n| Num(n.0 * 2)).collect()
+    });
+    worker.register::<Reducer, _, _>(|(acc, item): (Num, Num)| async move { Num(acc.0 + item.0) });
+    worker.register::<FlatExpand, _, _>(|n: Num| async move { vec![Num(n.0), Num(n.0 * 10)] });
+    worker.register::<Noop, _, _>(|n: Num| async move { n });
     worker.register::<Fail, _, _>(|_: Num| async { panic!("always fails") });
 
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -284,9 +328,160 @@ async fn retry_on_failure() {
     match result {
         Ok(n) => assert_eq!(n, Num(24)),
         Err(e) => {
-            // If both retries failed (counter race), that's acceptable
-            // in this test setup. Log it.
             tracing::warn!("retry test inconclusive: {e}");
         }
     }
+}
+
+#[tokio::test]
+async fn fan_out_reduce() {
+    if !should_run() {
+        return;
+    }
+
+    let (broker, barrier, wc) = setup().await;
+    let result: Num = run_pipeline(&broker, &barrier, wc, register_all, |b| {
+        Box::pin(async move {
+            Pipeline::new(b)
+                .first::<Produce>()
+                .fan_out()
+                .then::<Double>()
+                .reduce::<Reducer, Num>(Num(0))
+                .dispatch(())
+                .await
+                .unwrap()
+        })
+    })
+    .await;
+
+    // produce: [1,2,3], double: [2,4,6], reduce: 0+2+4+6 = 12
+    assert_eq!(result, Num(12));
+}
+
+#[tokio::test]
+async fn empty_fan_out_collect() {
+    if !should_run() {
+        return;
+    }
+
+    let (broker, barrier, wc) = setup().await;
+    let result: Vec<Num> = run_pipeline(&broker, &barrier, wc, register_all, |b| {
+        Box::pin(async move {
+            Pipeline::new(b)
+                .first::<ProduceEmpty>()
+                .fan_out()
+                .then::<Double>()
+                .collect()
+                .dispatch(())
+                .await
+                .unwrap()
+        })
+    })
+    .await;
+
+    assert_eq!(result, vec![]);
+}
+
+struct FlattenSum;
+impl Task for FlattenSum {
+    type Input = Vec<Vec<Num>>;
+    type Output = Num;
+    const NAME: &'static str = "pipeline_test::flatten_sum";
+}
+
+#[tokio::test]
+async fn chunked_fan_out() {
+    if !should_run() {
+        return;
+    }
+
+    let (broker, barrier, wc) = setup().await;
+    let result: Num = run_pipeline(
+        &broker,
+        &barrier,
+        wc,
+        |w| {
+            register_all(w);
+            w.register::<FlattenSum, _, _>(|chunks: Vec<Vec<Num>>| async move {
+                Num(chunks.into_iter().flatten().map(|n| n.0).sum())
+            });
+        },
+        |b| {
+            Box::pin(async move {
+                Pipeline::new(b)
+                    .first::<Produce>()
+                    .fan_out_chunked::<Num>(2)
+                    .then::<DoubleBatch>()
+                    .collect()
+                    .then::<FlattenSum>()
+                    .dispatch(())
+                    .await
+                    .unwrap()
+            })
+        },
+    )
+    .await;
+
+    // produce: [1,2,3], chunk(2): [[1,2],[3]], double_batch: [[2,4],[6]]
+    // collect: [[2,4],[6]], flatten+sum: 2+4+6 = 12
+    assert_eq!(result, Num(12));
+}
+
+#[tokio::test]
+async fn fan_out_tap_in_chain() {
+    if !should_run() {
+        return;
+    }
+
+    let (broker, barrier, wc) = setup().await;
+    let result: Num = run_pipeline(&broker, &barrier, wc, register_all, |b| {
+        Box::pin(async move {
+            Pipeline::new(b)
+                .first::<Produce>()
+                .fan_out()
+                .then::<Double>()
+                .tap::<Noop>()
+                .then::<AddTen>()
+                .collect()
+                .then::<Sum>()
+                .dispatch(())
+                .await
+                .unwrap()
+        })
+    })
+    .await;
+
+    // produce: [1,2,3], double: [2,4,6], tap(noop) ignored, add_ten: [12,14,16], sum: 42
+    assert_eq!(result, Num(42));
+}
+
+#[tokio::test]
+async fn error_propagation() {
+    if !should_run() {
+        return;
+    }
+
+    let (broker, barrier, wc) = setup().await;
+
+    let mut worker = RedisWorker::new(Arc::clone(&broker), Arc::clone(&barrier), wc);
+    register_all(&mut worker);
+
+    let handle = Pipeline::new(Arc::clone(&broker))
+        .first::<Double>()
+        .then::<Fail>()
+        .then::<AddTen>()
+        .dispatch(Num(5))
+        .await
+        .unwrap();
+
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let shutdown_clone = shutdown.clone();
+    let worker_handle = tokio::spawn(async move { worker.run(shutdown_clone).await });
+
+    let result: Result<Num, _> = handle.wait_result_timeout(Duration::from_secs(5)).await;
+
+    shutdown.cancel();
+    let _ = worker_handle.await;
+
+    assert!(result.is_err());
 }

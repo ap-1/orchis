@@ -25,8 +25,10 @@ fn should_run() -> bool {
 fn test_config() -> RedisConfig {
     let url = std::env::var("ORCHIS_TEST_REDIS_URL")
         .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned());
+    let id = uuid::Uuid::new_v4();
     let mut config = RedisConfig::new(url);
-    config.key_prefix = format!("orchis_test:{}", uuid::Uuid::new_v4());
+    config.key_prefix = format!("orchis_test:{id}");
+    config.queue_name = format!("orchis_test:queue:{id}");
     config
 }
 
