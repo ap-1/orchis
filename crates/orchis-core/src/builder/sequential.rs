@@ -80,7 +80,28 @@ impl<B: Broker, In, Out> Sequential<B, In, Out> {
         let idx = self.core.ops.len();
         self.core.ops.push(StepOp::FanOut(FanOutOp {
             task_id,
-            terminator_index: 0, // backfilled later
+            terminator_index: 0,
+            chunk_size: None,
+            extra_labels: self.core.extra_labels.clone(),
+        }));
+        self.core.fan_out_index = Some(idx);
+        FanOutHead::new(self.core)
+    }
+
+    /// Open a chunked fan-out context.
+    ///
+    /// Items are grouped into batches of `chunk_size` before
+    /// dispatching. Each per-item task receives `Vec<Item>`.
+    pub fn fan_out_chunked<Item>(mut self, chunk_size: usize) -> FanOutHead<B, In, Vec<Item>>
+    where
+        Out: IntoIterator<Item = Item>,
+    {
+        let task_id = self.core.broker.generate_id();
+        let idx = self.core.ops.len();
+        self.core.ops.push(StepOp::FanOut(FanOutOp {
+            task_id,
+            terminator_index: 0,
+            chunk_size: Some(chunk_size),
             extra_labels: self.core.extra_labels.clone(),
         }));
         self.core.fan_out_index = Some(idx);

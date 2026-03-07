@@ -324,3 +324,20 @@ async fn worker_processes_dispatched_task() {
     let output: DoubleOutput = result.deserialize_payload().unwrap();
     assert_eq!(output.0, 42);
 }
+
+#[tokio::test]
+async fn barrier_race_first_wins() {
+    if !should_run() {
+        return;
+    }
+
+    let config = test_config();
+    let barrier = test_barrier(config).await;
+    let id = uuid::Uuid::new_v4().to_string();
+
+    assert!(barrier.try_win_race(&id, "task-a").await.unwrap());
+    assert!(!barrier.try_win_race(&id, "task-b").await.unwrap());
+    assert!(!barrier.try_win_race(&id, "task-c").await.unwrap());
+
+    barrier.delete(&id).await.unwrap();
+}

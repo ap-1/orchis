@@ -32,6 +32,7 @@ fn fan_out_op_round_trip() {
     let op = StepOp::FanOut(FanOutOp {
         task_id: "tid-2".to_owned(),
         terminator_index: 5,
+        chunk_size: None,
         extra_labels: HashMap::new(),
     });
     let json = serde_json::to_string(&op).unwrap();
@@ -140,6 +141,7 @@ fn serialize_deserialize_ops_list() {
         StepOp::FanOut(FanOutOp {
             task_id: "b".to_owned(),
             terminator_index: 3,
+            chunk_size: None,
             extra_labels: HashMap::new(),
         }),
         StepOp::Then(ThenOp {

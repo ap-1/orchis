@@ -447,3 +447,26 @@ async fn fan_out_race() {
     // 5 ops: ProduceItems, FanOut, ProcessItem, Race, AfterRace
     assert_eq!(handle.task_id(), "id-4");
 }
+
+struct ProcessBatch;
+impl Task for ProcessBatch {
+    type Input = Vec<Item>;
+    type Output = Processed;
+    const NAME: &'static str = "test::process_batch";
+}
+
+#[tokio::test]
+async fn fan_out_chunked() {
+    let broker = MockBroker::new();
+    let handle = Pipeline::new(Arc::clone(&broker))
+        .first::<ProduceItems>()
+        .fan_out_chunked::<Item>(10)
+        .then::<ProcessBatch>()
+        .collect()
+        .dispatch(Input("chunked".to_owned()))
+        .await
+        .unwrap();
+
+    // 4 ops: ProduceItems, FanOut(chunk_size=10), ProcessBatch, Collect
+    assert_eq!(handle.task_id(), "id-3");
+}

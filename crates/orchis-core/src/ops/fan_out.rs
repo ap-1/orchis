@@ -34,6 +34,12 @@ pub struct FanOutOp {
     /// backfilled when the terminator is appended.
     pub terminator_index: usize,
 
+    /// When set, items are grouped into chunks of this size before
+    /// dispatching. Each child receives a JSON array of items instead
+    /// of a single item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_size: Option<usize>,
+
     /// Labels propagated to all child task messages.
     #[serde(default)]
     pub extra_labels: HashMap<String, String>,

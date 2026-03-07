@@ -242,7 +242,14 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
         op: &ops::FanOutOp,
         result: &TaskResult,
     ) -> Result<(), PipelineError> {
-        let items: Vec<serde_json::Value> = serde_json::from_slice(result.expect_data()?)?;
+        let raw_items: Vec<serde_json::Value> = serde_json::from_slice(result.expect_data()?)?;
+        let items: Vec<serde_json::Value> = match op.chunk_size {
+            Some(size) if size > 0 => raw_items
+                .chunks(size)
+                .map(|chunk| serde_json::Value::Array(chunk.to_vec()))
+                .collect(),
+            _ => raw_items,
+        };
         let terminator = &ctx.steps[op.terminator_index];
 
         if items.is_empty() {
@@ -593,51 +600,69 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
             }
         }
 
-        if matches!(&steps[terminator_index], StepOp::Sink(_)) {
-            let StepOp::Sink(sink_op) = &steps[terminator_index] else {
-                unreachable!()
-            };
-            let sink_op = sink_op.clone();
-            let ctx = PipelineContext {
-                broker: Arc::clone(&self.broker),
-                barrier: self.barrier.as_ref().map(Arc::clone),
-                raw_pipeline,
-                steps,
-                current_index: terminator_index,
-                source_labels: Arc::new(labels.clone()),
-            };
-            return self.execute_sink(&ctx, &sink_op, result).await;
-        }
-
-        if matches!(&steps[terminator_index], StepOp::Race(_)) {
-            return self
-                .handle_race_completion(
-                    task_id,
-                    labels,
-                    &raw_pipeline,
-                    &steps,
-                    terminator_index,
-                    result,
-                )
-                .await;
-        }
-
-        if labels.contains_key(FLAT_MAP_LABEL) {
-            self.handle_flat_map_barrier_completion(
-                task_id,
-                labels,
-                &raw_pipeline,
-                &steps,
-                terminator_index,
-            )
-            .await
-        } else {
-            self.handle_simple_barrier_completion(labels, &raw_pipeline, &steps, terminator_index)
-                .await
-        }
+        self.dispatch_to_terminator(
+            task_id,
+            labels,
+            &raw_pipeline,
+            &steps,
+            terminator_index,
+            result,
+        )
+        .await
     }
 
     /// Dispatch the next per-item continuation task.
+    /// Route a completed fan-out child to the appropriate terminator strategy.
+    async fn dispatch_to_terminator(
+        &self,
+        task_id: &str,
+        labels: &HashMap<String, String>,
+        raw_pipeline: &Arc<str>,
+        steps: &Arc<[StepOp]>,
+        terminator_index: usize,
+        result: &TaskResult,
+    ) -> Result<(), PipelineError> {
+        match &steps[terminator_index] {
+            StepOp::Sink(sink_op) => {
+                let sink_op = sink_op.clone();
+                let ctx = PipelineContext {
+                    broker: Arc::clone(&self.broker),
+                    barrier: self.barrier.as_ref().map(Arc::clone),
+                    raw_pipeline: Arc::clone(raw_pipeline),
+                    steps: Arc::clone(steps),
+                    current_index: terminator_index,
+                    source_labels: Arc::new(labels.clone()),
+                };
+                self.execute_sink(&ctx, &sink_op, result).await
+            }
+            StepOp::Race(_) => {
+                self.handle_race_completion(
+                    task_id,
+                    labels,
+                    raw_pipeline,
+                    steps,
+                    terminator_index,
+                    result,
+                )
+                .await
+            }
+            _ if labels.contains_key(FLAT_MAP_LABEL) => {
+                self.handle_flat_map_barrier_completion(
+                    task_id,
+                    labels,
+                    raw_pipeline,
+                    steps,
+                    terminator_index,
+                )
+                .await
+            }
+            _ => {
+                self.handle_simple_barrier_completion(labels, raw_pipeline, steps, terminator_index)
+                    .await
+            }
+        }
+    }
+
     async fn dispatch_per_item_continuation(
         &self,
         source_labels: &HashMap<String, String>,

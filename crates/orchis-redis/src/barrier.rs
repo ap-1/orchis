@@ -157,8 +157,8 @@ impl BarrierBackend for RedisBarrier {
         let winner_task_id = winner_task_id.to_owned();
         let client = self.client.clone();
         async move {
-            // SET NX EX: set only if not exists, with TTL.
-            let was_set: bool = client
+            // SET NX EX returns OK when the key was set, nil otherwise.
+            let result: Option<String> = client
                 .set(
                     &key,
                     &winner_task_id,
@@ -168,7 +168,7 @@ impl BarrierBackend for RedisBarrier {
                 )
                 .await
                 .map_err(to_barrier_error)?;
-            Ok(was_set)
+            Ok(result.is_some())
         }
     }
 
