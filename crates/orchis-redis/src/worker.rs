@@ -452,10 +452,9 @@ impl RedisWorker {
                 orchis_core::labels::RETRY_REMAINING.to_owned(),
                 (remaining - 1).to_string(),
             );
-            let new_id = inner.broker.generate_id();
             if let Err(e) = inner
                 .broker
-                .dispatch(task_name, &new_id, payload, retry_labels)
+                .dispatch(task_name, task_id, payload, retry_labels)
                 .await
             {
                 tracing::error!(task_id, "failed to dispatch retry: {e}");

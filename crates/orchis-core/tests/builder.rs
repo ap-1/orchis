@@ -470,3 +470,50 @@ async fn fan_out_chunked() {
     // 4 ops: ProduceItems, FanOut(chunk_size=10), ProcessBatch, Collect
     assert_eq!(handle.task_id(), "id-3");
 }
+
+#[tokio::test]
+async fn fan_out_head_race() {
+    let broker = MockBroker::new();
+    let handle = Pipeline::new(Arc::clone(&broker))
+        .first::<ProduceItems>()
+        .fan_out()
+        .race()
+        .dispatch(Input("head_race".to_owned()))
+        .await
+        .unwrap();
+
+    // 3 ops: ProduceItems, FanOut, Race
+    assert_eq!(handle.task_id(), "id-2");
+}
+
+#[tokio::test]
+async fn fan_out_head_wait() {
+    let broker = MockBroker::new();
+    let handle = Pipeline::new(Arc::clone(&broker))
+        .first::<ProduceItems>()
+        .fan_out()
+        .wait()
+        .then::<WaitAfterTask>()
+        .dispatch(Input("head_wait".to_owned()))
+        .await
+        .unwrap();
+
+    // 4 ops: ProduceItems, FanOut, Wait, WaitAfterTask
+    assert_eq!(handle.task_id(), "id-3");
+}
+
+#[tokio::test]
+async fn fan_out_head_flat_map() {
+    let broker = MockBroker::new();
+    let handle = Pipeline::new(Arc::clone(&broker))
+        .first::<ProduceItems>()
+        .fan_out()
+        .flat_map::<ExpandItem, Processed>()
+        .collect()
+        .dispatch(Input("head_flat_map".to_owned()))
+        .await
+        .unwrap();
+
+    // 4 ops: ProduceItems, FanOut, FlatMap, Collect
+    assert_eq!(handle.task_id(), "id-3");
+}

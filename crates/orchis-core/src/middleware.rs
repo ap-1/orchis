@@ -547,6 +547,22 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
 
         let steps: Arc<[StepOp]> = ops::deserialize_ops(raw_pipeline)?.into();
         let raw_pipeline: Arc<str> = Arc::from(raw_pipeline.as_str());
+
+        // If the completed task is a FlatMap step, expand its result
+        // into new children before advancing.
+        if matches!(&steps[current_index], StepOp::FlatMap(_)) {
+            return self
+                .handle_flat_map_expansion(
+                    task_id,
+                    labels,
+                    &raw_pipeline,
+                    &steps,
+                    current_index,
+                    result,
+                )
+                .await;
+        }
+
         let next_per_item_index = current_index + 1;
 
         if next_per_item_index < terminator_index {
@@ -749,7 +765,24 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
                 .await;
         }
 
-        let step_str: Arc<str> = Arc::from(flat_map_index.to_string().as_str());
+        // Dispatch expanded children to the step after the flat-map.
+        let next_index = flat_map_index + 1;
+        let next_task_name = match steps.get(next_index) {
+            Some(StepOp::Then(op)) => &op.task_name,
+            Some(other) => {
+                return Err(PipelineError::Internal(format!(
+                    "expected ThenOp after FlatMapOp, got {:?}",
+                    std::mem::discriminant(other)
+                )));
+            }
+            None => {
+                return Err(PipelineError::Internal(
+                    "no step after FlatMapOp".to_owned(),
+                ));
+            }
+        };
+
+        let step_str: Arc<str> = Arc::from(next_index.to_string().as_str());
         let terminator_str: Arc<str> = Arc::from(terminator_index.to_string().as_str());
         let barrier_arc: Arc<str> = Arc::from(barrier_id.as_ref());
         let child_ids: Vec<String> = items.iter().map(|_| self.broker.generate_id()).collect();
@@ -772,7 +805,7 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
 
                 self.broker
                     .dispatch(
-                        &flat_map_op.task_name,
+                        next_task_name,
                         child_id,
                         Bytes::from(payload),
                         dispatch_labels,

@@ -485,3 +485,174 @@ async fn error_propagation() {
 
     assert!(result.is_err());
 }
+
+struct SinkTarget;
+impl Task for SinkTarget {
+    type Input = Num;
+    type Output = ();
+    const NAME: &'static str = "pipeline_test::sink_target";
+}
+
+#[tokio::test]
+async fn fan_out_with_sink_terminator() {
+    if !should_run() {
+        return;
+    }
+
+    let (broker, barrier, wc) = setup().await;
+
+    let mut worker = RedisWorker::new(Arc::clone(&broker), Arc::clone(&barrier), wc);
+    register_all(&mut worker);
+    worker.register::<SinkTarget, _, _>(|_: Num| async {});
+
+    let handle = Pipeline::new(Arc::clone(&broker))
+        .first::<Produce>()
+        .fan_out()
+        .then::<Double>()
+        .sink::<SinkTarget>()
+        .dispatch(())
+        .await
+        .unwrap();
+
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let shutdown_clone = shutdown.clone();
+    let worker_handle = tokio::spawn(async move { worker.run(shutdown_clone).await });
+
+    let result: () = handle
+        .wait_result_timeout(Duration::from_secs(10))
+        .await
+        .unwrap();
+    let _ = result;
+
+    shutdown.cancel();
+    let _ = worker_handle.await;
+}
+
+struct AfterWait;
+impl Task for AfterWait {
+    type Input = ();
+    type Output = Num;
+    const NAME: &'static str = "pipeline_test::after_wait";
+}
+
+#[tokio::test]
+async fn fan_out_with_wait_terminator() {
+    if !should_run() {
+        return;
+    }
+
+    let (broker, barrier, wc) = setup().await;
+    let result: Num = run_pipeline(
+        &broker,
+        &barrier,
+        wc,
+        |w| {
+            register_all(w);
+            w.register::<AfterWait, _, _>(|_: ()| async { Num(99) });
+        },
+        |b| {
+            Box::pin(async move {
+                Pipeline::new(b)
+                    .first::<Produce>()
+                    .fan_out()
+                    .then::<Double>()
+                    .wait()
+                    .then::<AfterWait>()
+                    .dispatch(())
+                    .await
+                    .unwrap()
+            })
+        },
+    )
+    .await;
+
+    // produce [1,2,3], double each, wait discards results, AfterWait receives null and returns 99
+    assert_eq!(result, Num(99));
+}
+
+#[tokio::test]
+async fn flat_map_end_to_end() {
+    if !should_run() {
+        return;
+    }
+
+    let (broker, barrier, wc) = setup().await;
+    let result: Num = run_pipeline(&broker, &barrier, wc, register_all, |b| {
+        Box::pin(async move {
+            Pipeline::new(b)
+                .first::<Produce>()
+                .fan_out()
+                .flat_map::<FlatExpand, Num>()
+                .then::<Double>()
+                .collect()
+                .then::<Sum>()
+                .dispatch(())
+                .await
+                .unwrap()
+        })
+    })
+    .await;
+
+    // produce: [1,2,3]
+    // flat_expand each: [1,10], [2,20], [3,30] = 6 leaves
+    // double each: [2,20,4,40,6,60]
+    // sum: 132
+    assert_eq!(result, Num(132));
+}
+
+#[tokio::test]
+async fn retry_dispatch_path() {
+    if !should_run() {
+        return;
+    }
+
+    let (broker, barrier, wc) = setup().await;
+
+    use std::sync::atomic::{AtomicU32, Ordering};
+    // Use a unique counter per test to avoid static counter issues.
+    let call_count = Arc::new(AtomicU32::new(0));
+    let call_count_clone = Arc::clone(&call_count);
+
+    struct RetryTarget;
+    impl Task for RetryTarget {
+        type Input = Num;
+        type Output = Num;
+        const NAME: &'static str = "pipeline_test::retry_target";
+    }
+
+    let mut worker = RedisWorker::new(Arc::clone(&broker), Arc::clone(&barrier), wc);
+    register_all(&mut worker);
+    worker.register::<RetryTarget, _, _>(move |n: Num| {
+        let count = Arc::clone(&call_count_clone);
+        async move {
+            let attempt = count.fetch_add(1, Ordering::Relaxed);
+            if attempt < 2 {
+                panic!("fail on attempt {attempt}");
+            }
+            Num(n.0 * 5)
+        }
+    });
+
+    let handle = Pipeline::new(Arc::clone(&broker))
+        .first::<Double>()
+        .then::<RetryTarget>()
+        .retry(3)
+        .dispatch(Num(2))
+        .await
+        .unwrap();
+
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let shutdown_clone = shutdown.clone();
+    let worker_handle = tokio::spawn(async move { worker.run(shutdown_clone).await });
+
+    let result: Num = handle
+        .wait_result_timeout(Duration::from_secs(15))
+        .await
+        .unwrap();
+
+    shutdown.cancel();
+    let _ = worker_handle.await;
+
+    // Double: 2*2=4. RetryTarget fails twice, succeeds on 3rd: 4*5=20.
+    assert_eq!(result, Num(20));
+}

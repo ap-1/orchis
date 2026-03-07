@@ -173,3 +173,29 @@ fn step_op_task_id_accessor() {
     });
     assert_eq!(op.task_id(), "my-id");
 }
+
+#[test]
+fn step_op_extra_labels_accessor() {
+    let op = StepOp::Then(ThenOp {
+        task_id: "x".to_owned(),
+        task_name: "t".to_owned(),
+        retry: None,
+        extra_labels: labels(&[("queue", "fast"), ("priority", "high")]),
+    });
+    let el = op.extra_labels();
+    assert_eq!(el.get("queue").unwrap(), "fast");
+    assert_eq!(el.get("priority").unwrap(), "high");
+}
+
+#[test]
+fn from_serde_json_error() {
+    let err: orchis_core::PipelineError = serde_json::from_str::<StepOp>("invalid json")
+        .unwrap_err()
+        .into();
+    match err {
+        orchis_core::PipelineError::Serialization(msg) => {
+            assert!(msg.contains("expected"));
+        }
+        other => panic!("expected Serialization, got {other:?}"),
+    }
+}

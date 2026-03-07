@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use futures::FutureExt;
 use orchis_core::task::Task;
 
 /// A type-erased async handler: takes serialized input, returns serialized output.
@@ -14,7 +15,7 @@ pub type BoxedHandler =
 /// Wrap a typed async closure into a [`BoxedHandler`].
 ///
 /// Deserialization of `T::Input` and serialization of `T::Output`
-/// happen inside the wrapper. Serde errors become `Err(String)`.
+/// happen inside the wrapper. Serde errors and panics become `Err(String)`.
 pub fn wrap_handler<T, F, Fut>(f: F) -> BoxedHandler
 where
     T: Task,
@@ -27,7 +28,17 @@ where
         Box::pin(async move {
             let input: T::Input = serde_json::from_slice(&payload)
                 .map_err(|e| format!("failed to deserialize input: {e}"))?;
-            let output = f(input).await;
+            let output = std::panic::AssertUnwindSafe(f(input))
+                .catch_unwind()
+                .await
+                .map_err(|panic| {
+                    let msg = panic
+                        .downcast_ref::<&str>()
+                        .map(|s| s.to_string())
+                        .or_else(|| panic.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "task panicked".to_owned());
+                    format!("task panicked: {msg}")
+                })?;
             let bytes = serde_json::to_vec(&output)
                 .map_err(|e| format!("failed to serialize output: {e}"))?;
             Ok(Bytes::from(bytes))
