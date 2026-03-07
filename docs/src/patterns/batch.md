@@ -1,6 +1,4 @@
-# Chunked Fan-Out (Future)
-
-> This feature is not yet implemented. This page describes the design.
+# Chunked Fan-Out
 
 ## The problem
 
@@ -13,7 +11,7 @@ A chunked fan-out groups items into fixed-size batches and dispatches one task p
 ```rust
 Pipeline::new(broker)
     .first::<FindUrls>()              // () -> Vec<Url>
-    .fan_out_chunked(100)             // Vec<Url> -> chunks of Vec<Url>
+    .fan_out_chunked::<Url>(100)      // Vec<Url> -> chunks of Vec<Url>
     .then::<ScanUrlBatch>()           // Vec<Url> -> Vec<ScanResult>
     .collect()                        // Vec<Vec<ScanResult>>
     .then::<Flatten>()                // Vec<Vec<ScanResult>> -> Vec<ScanResult>
@@ -23,19 +21,19 @@ Pipeline::new(broker)
 
 ## Why runtime, not const generic
 
-The batch size is a runtime parameter (`fan_out_chunked(100)`), not a const generic (`fan_out_chunked::<100>()`). Batch size is typically a tuning knob read from configuration, not something you want baked into the type system.
+The batch size is a runtime parameter (`fan_out_chunked::<Url>(100)`), not a const generic (`fan_out_chunked::<100>()`). Batch size is typically a tuning knob read from configuration, not something you want baked into the type system.
 
 ## Type implications
 
 With regular `fan_out()`, per-item tasks receive `Item`. With chunked fan-out, per-item tasks receive `Vec<Item>`. The type signature changes:
 
 ```text
-fan_out()         -> FanOutHead<B, In, Item>
-fan_out_chunked() -> FanOutHead<B, In, Vec<Item>>
+fan_out()                    -> FanOutHead<B, In, Item>
+fan_out_chunked::<Item>(n)   -> FanOutHead<B, In, Vec<Item>>
 ```
 
 The collect step then gathers `Vec<Vec<Result>>` instead of `Vec<Result>`, so you typically need a flatten step afterwards.
 
-## Implementation approach
+## Implementation
 
-The chunking happens inside the middleware's `execute_fan_out`, not in a new op type. `FanOutOp` gains an optional `chunk_size: Option<usize>` field. When set, the middleware partitions the iterable into chunks before dispatching children. The barrier counts chunks, not individual items.
+The chunking happens inside the middleware's `execute_fan_out`. `FanOutOp` has an optional `chunk_size: Option<usize>` field. When set, the middleware partitions the iterable into chunks via `Vec::chunks` before dispatching children. The barrier counts chunks, not individual items.
