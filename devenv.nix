@@ -1,6 +1,10 @@
 { pkgs, config, ... }:
 
 {
+  packages = with pkgs; [
+    mdbook
+  ];
+
   languages.rust = {
     enable = true;
     channel = "nightly";

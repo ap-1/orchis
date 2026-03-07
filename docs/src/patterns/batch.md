@@ -1,0 +1,41 @@
+# Chunked Fan-Out (Future)
+
+> This feature is not yet implemented. This page describes the design.
+
+## The problem
+
+`fan_out()` dispatches one task per item. For large iterables (thousands of URLs, database rows, etc.), this creates one Redis stream message per item, one result key per item, and one barrier counter increment per item. The overhead per task can exceed the cost of the actual work.
+
+## The solution: `fan_out_chunked`
+
+A chunked fan-out groups items into fixed-size batches and dispatches one task per batch:
+
+```rust
+Pipeline::new(broker)
+    .first::<FindUrls>()              // () -> Vec<Url>
+    .fan_out_chunked(100)             // Vec<Url> -> chunks of Vec<Url>
+    .then::<ScanUrlBatch>()           // Vec<Url> -> Vec<ScanResult>
+    .collect()                        // Vec<Vec<ScanResult>>
+    .then::<Flatten>()                // Vec<Vec<ScanResult>> -> Vec<ScanResult>
+    .dispatch(())
+    .await?;
+```
+
+## Why runtime, not const generic
+
+The batch size is a runtime parameter (`fan_out_chunked(100)`), not a const generic (`fan_out_chunked::<100>()`). Batch size is typically a tuning knob read from configuration, not something you want baked into the type system.
+
+## Type implications
+
+With regular `fan_out()`, per-item tasks receive `Item`. With chunked fan-out, per-item tasks receive `Vec<Item>`. The type signature changes:
+
+```text
+fan_out()         -> FanOutHead<B, In, Item>
+fan_out_chunked() -> FanOutHead<B, In, Vec<Item>>
+```
+
+The collect step then gathers `Vec<Vec<Result>>` instead of `Vec<Result>`, so you typically need a flatten step afterwards.
+
+## Implementation approach
+
+The chunking happens inside the middleware's `execute_fan_out`, not in a new op type. `FanOutOp` gains an optional `chunk_size: Option<usize>` field. When set, the middleware partitions the iterable into chunks before dispatching children. The barrier counts chunks, not individual items.
