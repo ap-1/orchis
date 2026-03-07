@@ -35,6 +35,17 @@ Splits an iterable into parallel children. The previous step must return somethi
 .then::<ProcessItem>()   // Item -> Result
 ```
 
+### `fan_out_chunked`
+
+Like `fan_out`, but groups items into fixed-size batches before dispatching. Each per-item task receives `Vec<Item>` instead of `Item`. Batch size is a runtime parameter.
+
+```rust
+.first::<FindUrls>()              // () -> Vec<Url>
+.fan_out_chunked::<Url>(100)      // dispatches one child per chunk of 100
+.then::<ScanUrlBatch>()           // Vec<Url> -> BatchResult
+.collect()                        // Vec<BatchResult>
+```
+
 ### `flat_map`
 
 Like `then` inside a fan-out, but the task returns an iterable that spawns additional children within the same barrier. Enables nested parallelism without intermediate collect/flatten cycles.
@@ -102,3 +113,17 @@ Fire-and-forget terminal. Dispatches a task without waiting for its result. The 
 ```
 
 Can also terminate a fan-out, dispatching the sink task for each child independently.
+
+## Modifiers
+
+### `retry`
+
+Sets a retry policy on the preceding `then` step. When the task returns an error, the worker re-dispatches it with the original input up to `max_retries` times before aborting the pipeline.
+
+```rust
+.first::<FetchData>()
+.then::<ProcessData>().retry(3)   // retry up to 3 times on failure
+.then::<SaveResult>()
+```
+
+Works in both sequential and fan-out contexts.
