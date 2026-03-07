@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use orchis_core::ops::{
-    CollectOp, FanOutOp, FlatMapOp, ReduceOp, SinkOp, StepOp, TapOp, ThenOp, WaitOp,
+    CollectOp, FanOutOp, FlatMapOp, RaceOp, ReduceOp, SinkOp, StepOp, TapOp, ThenOp, WaitOp,
     deserialize_ops, serialize_ops,
 };
 
@@ -115,6 +115,18 @@ fn wait_op_round_trip() {
     let restored: StepOp = serde_json::from_str(&json).unwrap();
     assert_eq!(op, restored);
     assert!(json.contains(r#""op_type":"wait""#));
+}
+
+#[test]
+fn race_op_round_trip() {
+    let op = StepOp::Race(RaceOp {
+        task_id: "tid-9".to_owned(),
+        extra_labels: HashMap::new(),
+    });
+    let json = serde_json::to_string(&op).unwrap();
+    let restored: StepOp = serde_json::from_str(&json).unwrap();
+    assert_eq!(op, restored);
+    assert!(json.contains(r#""op_type":"race""#));
 }
 
 #[test]

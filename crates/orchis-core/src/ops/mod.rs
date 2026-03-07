@@ -8,6 +8,7 @@
 pub mod collect;
 pub mod fan_out;
 pub mod flat_map;
+pub mod race;
 pub mod reduce;
 pub mod sink;
 pub mod tap;
@@ -19,6 +20,7 @@ use serde::{Deserialize, Serialize};
 pub use self::collect::CollectOp;
 pub use self::fan_out::FanOutOp;
 pub use self::flat_map::FlatMapOp;
+pub use self::race::RaceOp;
 pub use self::reduce::ReduceOp;
 pub use self::sink::SinkOp;
 pub use self::tap::TapOp;
@@ -44,6 +46,8 @@ pub enum StepOp {
     Collect(CollectOp),
     /// Barrier-discard terminator.
     Wait(WaitOp),
+    /// First-wins terminator.
+    Race(RaceOp),
     /// Sequential fold terminator.
     Reduce(ReduceOp),
     /// Fire-and-forget terminator.
@@ -60,6 +64,7 @@ impl StepOp {
             Self::FlatMap(op) => &op.task_id,
             Self::Collect(op) => &op.task_id,
             Self::Wait(op) => &op.task_id,
+            Self::Race(op) => &op.task_id,
             Self::Reduce(op) => &op.task_id,
             Self::Sink(op) => &op.task_id,
         }
@@ -74,6 +79,7 @@ impl StepOp {
             Self::FlatMap(op) => &op.extra_labels,
             Self::Collect(op) => &op.extra_labels,
             Self::Wait(op) => &op.extra_labels,
+            Self::Race(op) => &op.extra_labels,
             Self::Reduce(op) => &op.extra_labels,
             Self::Sink(op) => &op.extra_labels,
         }

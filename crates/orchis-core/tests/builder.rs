@@ -423,3 +423,27 @@ async fn fan_out_tap() {
     // 5 ops: ProduceItems, FanOut, ProcessItem, Tap(Audit), Collect
     assert_eq!(handle.task_id(), "id-4");
 }
+
+struct AfterRace;
+impl Task for AfterRace {
+    type Input = Processed;
+    type Output = Output;
+    const NAME: &'static str = "test::after_race";
+}
+
+#[tokio::test]
+async fn fan_out_race() {
+    let broker = MockBroker::new();
+    let handle = Pipeline::new(Arc::clone(&broker))
+        .first::<ProduceItems>()
+        .fan_out()
+        .then::<ProcessItem>()
+        .race()
+        .then::<AfterRace>()
+        .dispatch(Input("race".to_owned()))
+        .await
+        .unwrap();
+
+    // 5 ops: ProduceItems, FanOut, ProcessItem, Race, AfterRace
+    assert_eq!(handle.task_id(), "id-4");
+}

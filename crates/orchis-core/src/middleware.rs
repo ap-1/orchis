@@ -127,6 +127,7 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
                 StepOp::FanOut(op) => self.execute_fan_out(ctx, op, result).await,
                 StepOp::Collect(op) => self.execute_collect(ctx, op, result).await,
                 StepOp::Wait(op) => self.execute_wait(ctx, op, result).await,
+                StepOp::Race(op) => self.execute_race(ctx, op, result).await,
                 StepOp::Reduce(op) => self.execute_reduce(ctx, op, result).await,
                 StepOp::Sink(op) => self.execute_sink(ctx, op, result).await,
                 StepOp::FlatMap(_) => Err(PipelineError::Internal(
@@ -189,6 +190,23 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
             self.broker
                 .set_result(op.task_id.as_str(), result.clone())
                 .await?;
+            return Ok(());
+        }
+
+        let next_ctx = ctx.at_index(next_index);
+        self.execute_step(&next_ctx, result).await
+    }
+
+    /// First-wins: forward the winning child's result to the next step.
+    async fn execute_race(
+        &self,
+        ctx: &PipelineContext<B, BB>,
+        op: &ops::RaceOp,
+        result: &TaskResult,
+    ) -> Result<(), PipelineError> {
+        let next_index = ctx.current_index + 1;
+        if next_index >= ctx.steps.len() {
+            self.broker.set_result(&op.task_id, result.clone()).await?;
             return Ok(());
         }
 
@@ -384,7 +402,10 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
         terminator_index: usize,
         terminator: &StepOp,
     ) -> Result<(), PipelineError> {
-        let empty_payload = Bytes::from_static(b"[]");
+        let empty_payload = match terminator {
+            StepOp::Collect(_) | StepOp::Reduce(_) => Bytes::from_static(b"[]"),
+            _ => Bytes::from_static(b"null"),
+        };
         let synthetic = TaskResult::success(empty_payload);
 
         let next_after_terminator = terminator_index + 1;
@@ -585,6 +606,19 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
             return self.execute_sink(&ctx, &sink_op, result).await;
         }
 
+        if matches!(&steps[terminator_index], StepOp::Race(_)) {
+            return self
+                .handle_race_completion(
+                    task_id,
+                    labels,
+                    &raw_pipeline,
+                    &steps,
+                    terminator_index,
+                    result,
+                )
+                .await;
+        }
+
         if labels.contains_key(FLAT_MAP_LABEL) {
             self.handle_flat_map_barrier_completion(
                 task_id,
@@ -722,6 +756,38 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
         try_join_all(futs).await?;
 
         Ok(())
+    }
+
+    /// Race barrier completion: first child to win claims the race.
+    async fn handle_race_completion(
+        &self,
+        task_id: &str,
+        labels: &HashMap<String, String>,
+        raw_pipeline: &Arc<str>,
+        steps: &Arc<[StepOp]>,
+        terminator_index: usize,
+        result: &TaskResult,
+    ) -> Result<(), PipelineError> {
+        let barrier = self.require_barrier()?;
+        let terminator = &steps[terminator_index];
+        let barrier_id = terminator.task_id();
+
+        let won = barrier.try_win_race(barrier_id, task_id).await?;
+        if !won {
+            return Ok(());
+        }
+
+        barrier.delete(barrier_id).await?;
+
+        let ctx = PipelineContext {
+            broker: Arc::clone(&self.broker),
+            barrier: self.barrier.as_ref().map(Arc::clone),
+            raw_pipeline: Arc::clone(raw_pipeline),
+            steps: Arc::clone(steps),
+            current_index: terminator_index,
+            source_labels: Arc::new(labels.clone()),
+        };
+        self.execute_step(&ctx, result).await
     }
 
     /// Simple barrier completion: INCR, check total, gather results.

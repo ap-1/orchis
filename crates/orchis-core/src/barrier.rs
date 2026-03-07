@@ -64,6 +64,16 @@ pub trait BarrierBackend: Send + Sync + 'static {
         barrier_id: &str,
     ) -> impl Future<Output = Result<Vec<String>, BarrierError>> + Send;
 
+    /// Atomically attempt to claim a race barrier.
+    ///
+    /// Returns `true` if this caller is the first (the winner),
+    /// `false` if another task already won.
+    fn try_win_race(
+        &self,
+        barrier_id: &str,
+        winner_task_id: &str,
+    ) -> impl Future<Output = Result<bool, BarrierError>> + Send;
+
     /// Remove all state associated with a barrier.
     fn delete(&self, barrier_id: &str) -> impl Future<Output = Result<(), BarrierError>> + Send;
 }

@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use serde::Serialize;
 
 use crate::broker::Broker;
-use crate::ops::{CollectOp, FlatMapOp, ReduceOp, SinkOp, StepOp, TapOp, ThenOp, WaitOp};
+use crate::ops::{CollectOp, FlatMapOp, RaceOp, ReduceOp, SinkOp, StepOp, TapOp, ThenOp, WaitOp};
 use crate::task::Task;
 
 use super::core::{PipelineCore, backfill_fan_out};
@@ -72,6 +72,19 @@ impl<B: Broker, In, Item> FanOutHead<B, In, Item> {
     pub fn wait(mut self) -> Sequential<B, In, ()> {
         let task_id = self.core.broker.generate_id();
         self.core.ops.push(StepOp::Wait(WaitOp {
+            task_id,
+            extra_labels: self.core.extra_labels.clone(),
+        }));
+        backfill_fan_out(&mut self.core);
+        Sequential::new(self.core)
+    }
+
+    /// Resolve on the first child to complete, discarding the rest.
+    ///
+    /// Closes the fan-out context. The winning child's result is forwarded.
+    pub fn race(mut self) -> Sequential<B, In, Item> {
+        let task_id = self.core.broker.generate_id();
+        self.core.ops.push(StepOp::Race(RaceOp {
             task_id,
             extra_labels: self.core.extra_labels.clone(),
         }));
@@ -209,6 +222,19 @@ impl<B: Broker, In, Item, Out> InFanOut<B, In, Item, Out> {
     pub fn wait(mut self) -> Sequential<B, In, ()> {
         let task_id = self.core.broker.generate_id();
         self.core.ops.push(StepOp::Wait(WaitOp {
+            task_id,
+            extra_labels: self.core.extra_labels.clone(),
+        }));
+        backfill_fan_out(&mut self.core);
+        Sequential::new(self.core)
+    }
+
+    /// Resolve on the first child to complete, discarding the rest.
+    ///
+    /// Closes the fan-out context. The winning child's result is forwarded.
+    pub fn race(mut self) -> Sequential<B, In, Out> {
+        let task_id = self.core.broker.generate_id();
+        self.core.ops.push(StepOp::Race(RaceOp {
             task_id,
             extra_labels: self.core.extra_labels.clone(),
         }));

@@ -30,6 +30,10 @@ impl RedisBarrier {
     fn leaves_key(&self, barrier_id: &str) -> String {
         self.config.barrier_key(barrier_id, "leaves")
     }
+
+    fn winner_key(&self, barrier_id: &str) -> String {
+        self.config.barrier_key(barrier_id, "winner")
+    }
 }
 
 impl BarrierBackend for RedisBarrier {
@@ -143,11 +147,37 @@ impl BarrierBackend for RedisBarrier {
         }
     }
 
+    fn try_win_race(
+        &self,
+        barrier_id: &str,
+        winner_task_id: &str,
+    ) -> impl Future<Output = Result<bool, BarrierError>> + Send {
+        let key = self.winner_key(barrier_id);
+        let ttl = self.config.barrier_ttl_secs;
+        let winner_task_id = winner_task_id.to_owned();
+        let client = self.client.clone();
+        async move {
+            // SET NX EX: set only if not exists, with TTL.
+            let was_set: bool = client
+                .set(
+                    &key,
+                    &winner_task_id,
+                    Some(fred::types::Expiration::EX(ttl as i64)),
+                    Some(fred::types::SetOptions::NX),
+                    false,
+                )
+                .await
+                .map_err(to_barrier_error)?;
+            Ok(was_set)
+        }
+    }
+
     fn delete(&self, barrier_id: &str) -> impl Future<Output = Result<(), BarrierError>> + Send {
         let keys = vec![
             self.completed_key(barrier_id),
             self.pending_key(barrier_id),
             self.leaves_key(barrier_id),
+            self.winner_key(barrier_id),
         ];
         let client = self.client.clone();
         async move {
