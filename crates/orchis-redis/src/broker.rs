@@ -128,7 +128,7 @@ impl Broker for RedisBroker {
                 .set(
                     &result_key,
                     &serialized,
-                    Some(fred::types::Expiration::EX(ttl as i64)),
+                    Some(fred::types::Expiration::EX(ttl)),
                     None,
                     false,
                 )

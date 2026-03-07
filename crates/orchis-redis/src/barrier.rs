@@ -48,7 +48,7 @@ impl BarrierBackend for RedisBarrier {
             let val: i64 = client.incr(&key).await.map_err(to_barrier_error)?;
             if val == 1 {
                 let _: bool = client
-                    .expire(&key, ttl as i64, None)
+                    .expire(&key, ttl, None)
                     .await
                     .map_err(to_barrier_error)?;
             }
@@ -72,7 +72,7 @@ impl BarrierBackend for RedisBarrier {
                 .set(
                     &pending_key,
                     pending as i64,
-                    Some(fred::types::Expiration::EX(ttl as i64)),
+                    Some(fred::types::Expiration::EX(ttl)),
                     None,
                     false,
                 )
@@ -88,19 +88,29 @@ impl BarrierBackend for RedisBarrier {
         barrier_id: &str,
         num_children: usize,
     ) -> impl Future<Output = Result<usize, BarrierError>> + Send {
-        let key = self.pending_key(barrier_id);
+        let pending_key = self.pending_key(barrier_id);
+        let leaves_key = self.leaves_key(barrier_id);
         let delta = num_children as i64 - 1;
+        let ttl = self.config.barrier_ttl_secs;
         let client = self.client.clone();
         async move {
             let val: i64 = client
-                .incr_by(&key, delta)
+                .incr_by(&pending_key, delta)
                 .await
                 .map_err(to_barrier_error)?;
             if val < 0 {
                 return Err(BarrierError::Inconsistent(format!(
-                    "pending counter went negative ({val}) for barrier {key}"
+                    "pending counter went negative ({val}) for barrier {pending_key}"
                 )));
             }
+            let _: bool = client
+                .expire(&pending_key, ttl, None)
+                .await
+                .map_err(to_barrier_error)?;
+            let _: bool = client
+                .expire(&leaves_key, ttl, None)
+                .await
+                .map_err(to_barrier_error)?;
             Ok(val as usize)
         }
     }
@@ -112,10 +122,10 @@ impl BarrierBackend for RedisBarrier {
     ) -> impl Future<Output = Result<usize, BarrierError>> + Send {
         let leaves_key = self.leaves_key(barrier_id);
         let pending_key = self.pending_key(barrier_id);
+        let ttl = self.config.barrier_ttl_secs;
         let task_id = task_id.to_owned();
         let client = self.client.clone();
         async move {
-            // Atomic LPUSH + DECRBY via MULTI/EXEC.
             let trx = client.multi();
             let _: () = trx
                 .lpush(&leaves_key, &task_id)
@@ -125,7 +135,16 @@ impl BarrierBackend for RedisBarrier {
                 .decr_by(&pending_key, 1)
                 .await
                 .map_err(to_barrier_error)?;
-            let (_, pending): (i64, i64) = trx.exec(true).await.map_err(to_barrier_error)?;
+            let _: () = trx
+                .expire(&pending_key, ttl, None)
+                .await
+                .map_err(to_barrier_error)?;
+            let _: () = trx
+                .expire(&leaves_key, ttl, None)
+                .await
+                .map_err(to_barrier_error)?;
+            let (_, pending, _, _): (i64, i64, bool, bool) =
+                trx.exec(true).await.map_err(to_barrier_error)?;
             if pending < 0 {
                 return Err(BarrierError::Inconsistent(format!(
                     "pending counter went negative ({pending}) after complete_leaf"
@@ -162,7 +181,7 @@ impl BarrierBackend for RedisBarrier {
                 .set(
                     &key,
                     &winner_task_id,
-                    Some(fred::types::Expiration::EX(ttl as i64)),
+                    Some(fred::types::Expiration::EX(ttl)),
                     Some(fred::types::SetOptions::NX),
                     false,
                 )

@@ -20,12 +20,12 @@ pub struct RedisConfig {
     /// TTL in seconds for result and notification keys.
     ///
     /// Defaults to 86400 (1 day).
-    pub result_ttl_secs: u64,
+    pub result_ttl_secs: i64,
 
     /// TTL in seconds for barrier keys.
     ///
     /// Defaults to 86400 (1 day).
-    pub barrier_ttl_secs: u64,
+    pub barrier_ttl_secs: i64,
 }
 
 impl RedisConfig {

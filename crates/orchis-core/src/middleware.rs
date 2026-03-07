@@ -35,6 +35,15 @@ struct ReduceFoldState<'a> {
     items_key: &'a str,
 }
 
+/// Parsed context from a fan-out child's message labels.
+struct FanOutChildContext<'a> {
+    task_id: &'a str,
+    labels: &'a HashMap<String, String>,
+    raw_pipeline: Arc<str>,
+    steps: Arc<[StepOp]>,
+    result: &'a TaskResult,
+}
+
 /// Core pipeline advancement logic.
 ///
 /// Generic over the broker and barrier backend. Adapter crates are
@@ -662,7 +671,7 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
         labels: &HashMap<String, String>,
         result: &TaskResult,
     ) -> Result<(), PipelineError> {
-        let raw_pipeline = labels.get(labels::PIPELINE).ok_or(PipelineError::Empty)?;
+        let raw_pipeline_str = labels.get(labels::PIPELINE).ok_or(PipelineError::Empty)?;
         let current_index: usize = labels
             .get(labels::PIPELINE_STEP)
             .and_then(|s| s.parse().ok())
@@ -676,87 +685,89 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
                 PipelineError::Internal("missing or invalid terminator index".to_owned())
             })?;
 
-        let steps: Arc<[StepOp]> = ops::deserialize_ops(raw_pipeline)?.into();
-        let raw_pipeline: Arc<str> = Arc::from(raw_pipeline.as_str());
+        let child_ctx = FanOutChildContext {
+            task_id,
+            labels,
+            steps: ops::deserialize_ops(raw_pipeline_str)?.into(),
+            raw_pipeline: Arc::from(raw_pipeline_str.as_str()),
+            result,
+        };
 
-        // If the completed task is a FlatMap step, expand its result
-        // into new children before advancing.
-        if matches!(&steps[current_index], StepOp::FlatMap(_)) {
+        if matches!(&child_ctx.steps[current_index], StepOp::FlatMap(_)) {
             return self
-                .handle_flat_map_expansion(
-                    task_id,
-                    labels,
-                    &raw_pipeline,
-                    &steps,
-                    current_index,
-                    result,
-                )
+                .handle_flat_map_expansion(&child_ctx, current_index)
                 .await;
         }
 
-        let next_per_item_index = current_index + 1;
-
-        if next_per_item_index < terminator_index {
-            // Dispatch any consecutive TapOps as side tasks, then
-            // continue with the first non-tap op.
-            let mut idx = next_per_item_index;
-            while idx < terminator_index {
-                if let StepOp::Tap(tap_op) = &steps[idx] {
-                    self.dispatch_side_task(labels, tap_op, result).await?;
-                    idx += 1;
-                } else {
-                    break;
-                }
-            }
-
-            if idx >= terminator_index {
-                // All remaining per-item ops were taps; fall through to barrier.
-            } else {
-                let next_op = &steps[idx];
-                match next_op {
-                    StepOp::FlatMap(_) => {
-                        return self
-                            .handle_flat_map_expansion(
-                                task_id,
-                                labels,
-                                &raw_pipeline,
-                                &steps,
-                                idx,
-                                result,
-                            )
-                            .await;
-                    }
-                    StepOp::Then(then_op) => {
-                        return self
-                            .dispatch_per_item_continuation(
-                                task_id,
-                                labels,
-                                &raw_pipeline,
-                                then_op,
-                                idx,
-                                result,
-                            )
-                            .await;
-                    }
-                    other => {
-                        return Err(PipelineError::Internal(format!(
-                            "unexpected op type at per-item index {idx}: {:?}",
-                            std::mem::discriminant(other)
-                        )));
-                    }
-                }
-            }
+        let next_index = current_index + 1;
+        if next_index < terminator_index
+            && self
+                .advance_per_item_chain(&child_ctx, next_index, terminator_index)
+                .await?
+                .is_some()
+        {
+            return Ok(());
         }
 
         self.dispatch_to_terminator(
-            task_id,
-            labels,
-            &raw_pipeline,
-            &steps,
+            child_ctx.task_id,
+            child_ctx.labels,
+            &child_ctx.raw_pipeline,
+            &child_ctx.steps,
             terminator_index,
-            result,
+            child_ctx.result,
         )
         .await
+    }
+
+    /// Dispatch taps and route to the next per-item step.
+    ///
+    /// Returns `Some(())` if a continuation was dispatched, `None` if
+    /// all remaining per-item ops were taps and execution should fall
+    /// through to the terminator.
+    async fn advance_per_item_chain(
+        &self,
+        ctx: &FanOutChildContext<'_>,
+        start_index: usize,
+        terminator_index: usize,
+    ) -> Result<Option<()>, PipelineError> {
+        let mut idx = start_index;
+        while idx < terminator_index {
+            if let StepOp::Tap(tap_op) = &ctx.steps[idx] {
+                self.dispatch_side_task(ctx.labels, tap_op, ctx.result)
+                    .await?;
+                idx += 1;
+            } else {
+                break;
+            }
+        }
+
+        if idx >= terminator_index {
+            return Ok(None);
+        }
+
+        match &ctx.steps[idx] {
+            StepOp::FlatMap(_) => {
+                self.handle_flat_map_expansion(ctx, idx).await?;
+                Ok(Some(()))
+            }
+            StepOp::Then(then_op) => {
+                self.dispatch_per_item_continuation(
+                    ctx.task_id,
+                    ctx.labels,
+                    &ctx.raw_pipeline,
+                    then_op,
+                    idx,
+                    ctx.result,
+                )
+                .await?;
+                Ok(Some(()))
+            }
+            other => Err(PipelineError::Internal(format!(
+                "unexpected op type at per-item index {idx}: {:?}",
+                std::mem::discriminant(other)
+            ))),
+        }
     }
 
     /// Dispatch the next per-item continuation task.
@@ -857,14 +868,14 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
     /// Handle flat-map expansion: adjust pending counter, dispatch children.
     async fn handle_flat_map_expansion(
         &self,
-        _task_id: &str,
-        source_labels: &HashMap<String, String>,
-        raw_pipeline: &str,
-        steps: &[StepOp],
+        ctx: &FanOutChildContext<'_>,
         flat_map_index: usize,
-        result: &TaskResult,
     ) -> Result<(), PipelineError> {
         let barrier = self.require_barrier()?;
+        let source_labels = ctx.labels;
+        let raw_pipeline: &str = &ctx.raw_pipeline;
+        let steps = &ctx.steps;
+        let result = ctx.result;
 
         assert!(
             matches!(&steps[flat_map_index], StepOp::FlatMap(_)),
