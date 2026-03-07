@@ -518,11 +518,10 @@ async fn fan_out_with_sink_terminator() {
     let shutdown_clone = shutdown.clone();
     let worker_handle = tokio::spawn(async move { worker.run(shutdown_clone).await });
 
-    let result: () = handle
+    let _: () = handle
         .wait_result_timeout(Duration::from_secs(10))
         .await
         .unwrap();
-    let _ = result;
 
     shutdown.cancel();
     let _ = worker_handle.await;

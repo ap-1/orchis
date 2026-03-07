@@ -1,7 +1,6 @@
 //! Tests that the pipeline builder produces the correct ops sequence.
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -34,37 +33,30 @@ impl Broker for MockBroker {
         format!("id-{n}")
     }
 
-    fn dispatch(
+    async fn dispatch(
         &self,
         _task_name: &str,
         _task_id: &str,
         _payload: Bytes,
         _labels: HashMap<String, String>,
-    ) -> impl Future<Output = Result<(), BrokerError>> + Send {
-        async { Ok(()) }
+    ) -> Result<(), BrokerError> {
+        Ok(())
     }
 
-    fn set_result(
-        &self,
-        _task_id: &str,
-        _result: TaskResult,
-    ) -> impl Future<Output = Result<(), BrokerError>> + Send {
-        async { Ok(()) }
+    async fn set_result(&self, _task_id: &str, _result: TaskResult) -> Result<(), BrokerError> {
+        Ok(())
     }
 
-    fn get_result(
-        &self,
-        _task_id: &str,
-    ) -> impl Future<Output = Result<Option<TaskResult>, BrokerError>> + Send {
-        async { Ok(None) }
+    async fn get_result(&self, _task_id: &str) -> Result<Option<TaskResult>, BrokerError> {
+        Ok(None)
     }
 
-    fn wait_result(
+    async fn wait_result(
         &self,
         _task_id: &str,
         _timeout: Option<Duration>,
-    ) -> impl Future<Output = Result<TaskResult, BrokerError>> + Send {
-        async { Err(BrokerError::Timeout) }
+    ) -> Result<TaskResult, BrokerError> {
+        Err(BrokerError::Timeout)
     }
 }
 
@@ -200,38 +192,31 @@ async fn fan_out_backfills_terminator_index() {
             format!("id-{n}")
         }
 
-        fn dispatch(
+        async fn dispatch(
             &self,
             _task_name: &str,
             _task_id: &str,
             _payload: Bytes,
             labels: HashMap<String, String>,
-        ) -> impl Future<Output = Result<(), BrokerError>> + Send {
+        ) -> Result<(), BrokerError> {
             *self.captured.lock().unwrap() = Some(labels);
-            async { Ok(()) }
+            Ok(())
         }
 
-        fn set_result(
-            &self,
-            _task_id: &str,
-            _result: TaskResult,
-        ) -> impl Future<Output = Result<(), BrokerError>> + Send {
-            async { Ok(()) }
+        async fn set_result(&self, _task_id: &str, _result: TaskResult) -> Result<(), BrokerError> {
+            Ok(())
         }
 
-        fn get_result(
-            &self,
-            _task_id: &str,
-        ) -> impl Future<Output = Result<Option<TaskResult>, BrokerError>> + Send {
-            async { Ok(None) }
+        async fn get_result(&self, _task_id: &str) -> Result<Option<TaskResult>, BrokerError> {
+            Ok(None)
         }
 
-        fn wait_result(
+        async fn wait_result(
             &self,
             _task_id: &str,
             _timeout: Option<Duration>,
-        ) -> impl Future<Output = Result<TaskResult, BrokerError>> + Send {
-            async { Err(BrokerError::Timeout) }
+        ) -> Result<TaskResult, BrokerError> {
+            Err(BrokerError::Timeout)
         }
     }
 

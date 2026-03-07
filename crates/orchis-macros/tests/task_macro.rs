@@ -45,4 +45,10 @@ async fn compute_result(input: Input) -> Output {
 #[test]
 fn macro_generates_pascal_case_struct() {
     assert_eq!(ComputeResultTask::NAME, "test::snake_case_name");
+    // Verify the function is preserved alongside the struct.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let result = rt.block_on(compute_result(Input(7)));
+    assert_eq!(result, Output("7".to_owned()));
 }

@@ -735,10 +735,10 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
     ) -> Result<(), PipelineError> {
         let barrier = self.require_barrier()?;
 
-        let flat_map_op = match &steps[flat_map_index] {
-            StepOp::FlatMap(op) => op,
-            _ => unreachable!("index verified by caller"),
-        };
+        assert!(
+            matches!(&steps[flat_map_index], StepOp::FlatMap(_)),
+            "index verified by caller"
+        );
 
         let barrier_id = source_labels
             .get(BARRIER_LABEL)
