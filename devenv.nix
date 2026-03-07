@@ -3,6 +3,7 @@
 {
   packages = with pkgs; [
     mdbook
+    cargo-llvm-cov
   ];
 
   languages.rust = {
@@ -15,6 +16,7 @@
       "rustfmt"
       "rust-analyzer"
       "rust-src"
+      "llvm-tools"
     ];
   };
 
