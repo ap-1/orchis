@@ -19,6 +19,7 @@ fn then_op_round_trip() {
     let op = StepOp::Then(ThenOp {
         task_id: "tid-1".to_owned(),
         task_name: "app::scan".to_owned(),
+        retry: None,
         extra_labels: labels(&[("queue", "fast")]),
     });
     let json = serde_json::to_string(&op).unwrap();
@@ -136,6 +137,7 @@ fn serialize_deserialize_ops_list() {
         StepOp::Then(ThenOp {
             task_id: "a".to_owned(),
             task_name: "step_a".to_owned(),
+            retry: None,
             extra_labels: HashMap::new(),
         }),
         StepOp::FanOut(FanOutOp {
@@ -147,6 +149,7 @@ fn serialize_deserialize_ops_list() {
         StepOp::Then(ThenOp {
             task_id: "c".to_owned(),
             task_name: "step_c".to_owned(),
+            retry: None,
             extra_labels: HashMap::new(),
         }),
         StepOp::Collect(CollectOp {
@@ -165,6 +168,7 @@ fn step_op_task_id_accessor() {
     let op = StepOp::Then(ThenOp {
         task_id: "my-id".to_owned(),
         task_name: "t".to_owned(),
+        retry: None,
         extra_labels: HashMap::new(),
     });
     assert_eq!(op.task_id(), "my-id");

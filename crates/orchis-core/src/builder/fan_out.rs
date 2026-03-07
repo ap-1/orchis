@@ -5,6 +5,7 @@ use std::marker::PhantomData;
 use serde::Serialize;
 
 use crate::broker::Broker;
+use crate::ops::then::RetryPolicy;
 use crate::ops::{CollectOp, FlatMapOp, RaceOp, ReduceOp, SinkOp, StepOp, TapOp, ThenOp, WaitOp};
 use crate::task::Task;
 
@@ -43,6 +44,7 @@ impl<B: Broker, In, Item> FanOutHead<B, In, Item> {
         self.core.ops.push(StepOp::Then(ThenOp {
             task_id,
             task_name: T::NAME.to_owned(),
+            retry: None,
             extra_labels: self.core.extra_labels.clone(),
         }));
         InFanOut::new(self.core)
@@ -133,6 +135,14 @@ impl<B: Broker, In, Item, Out> InFanOut<B, In, Item, Out> {
         }
     }
 
+    /// Set a retry policy on the most recently appended per-item step.
+    pub fn retry(mut self, max_retries: u32) -> Self {
+        if let Some(StepOp::Then(op)) = self.core.ops.last_mut() {
+            op.retry = Some(RetryPolicy { max_retries });
+        }
+        self
+    }
+
     /// Add another per-item task.
     ///
     /// `T::Input` must equal `Out`.
@@ -141,6 +151,7 @@ impl<B: Broker, In, Item, Out> InFanOut<B, In, Item, Out> {
         self.core.ops.push(StepOp::Then(ThenOp {
             task_id,
             task_name: T::NAME.to_owned(),
+            retry: None,
             extra_labels: self.core.extra_labels.clone(),
         }));
         InFanOut::new(self.core)

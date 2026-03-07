@@ -8,6 +8,7 @@ use serde::de::DeserializeOwned;
 use crate::broker::Broker;
 use crate::error::PipelineError;
 use crate::handle::TaskHandle;
+use crate::ops::then::RetryPolicy;
 use crate::ops::{FanOutOp, SinkOp, StepOp, TapOp, ThenOp};
 use crate::task::Task;
 
@@ -41,6 +42,17 @@ impl<B: Broker, In, Out> Sequential<B, In, Out> {
         }
     }
 
+    /// Set a retry policy on the most recently appended step.
+    ///
+    /// When the task returns an error, the middleware re-dispatches it
+    /// up to `max_retries` times before aborting the pipeline.
+    pub fn retry(mut self, max_retries: u32) -> Self {
+        if let Some(StepOp::Then(op)) = self.core.ops.last_mut() {
+            op.retry = Some(RetryPolicy { max_retries });
+        }
+        self
+    }
+
     /// Append a sequential task.
     ///
     /// A mismatch between `T::Input` and `Out` is a compile error.
@@ -49,6 +61,7 @@ impl<B: Broker, In, Out> Sequential<B, In, Out> {
         self.core.ops.push(StepOp::Then(ThenOp {
             task_id,
             task_name: T::NAME.to_owned(),
+            retry: None,
             extra_labels: self.core.extra_labels.clone(),
         }));
         Sequential::new(self.core)

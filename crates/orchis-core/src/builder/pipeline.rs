@@ -51,6 +51,7 @@ impl<B: Broker> Pipeline<B> {
         self.core.ops.push(StepOp::Then(ThenOp {
             task_id,
             task_name: T::NAME.to_owned(),
+            retry: None,
             extra_labels: self.core.extra_labels.clone(),
         }));
         Sequential::new(self.core)

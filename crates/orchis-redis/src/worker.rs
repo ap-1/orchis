@@ -336,6 +336,28 @@ impl RedisWorker {
         Ok(result)
     }
 
+    /// Determine how many retries remain for the current step.
+    ///
+    /// Returns `Some(remaining)` if the step has a retry policy,
+    /// `None` if it does not.
+    fn retries_remaining(labels: &HashMap<String, String>) -> Option<u32> {
+        if let Some(remaining) = labels.get(orchis_core::labels::RETRY_REMAINING) {
+            return remaining.parse().ok();
+        }
+
+        let raw_pipeline = labels.get(orchis_core::labels::PIPELINE)?;
+        let raw_step = labels.get(orchis_core::labels::PIPELINE_STEP)?;
+        let current_index: usize = raw_step.parse().ok()?;
+        let steps = orchis_core::ops::deserialize_ops(raw_pipeline).ok()?;
+        let op = steps.get(current_index)?;
+
+        if let orchis_core::ops::StepOp::Then(then_op) = op {
+            then_op.retry.as_ref().map(|p| p.max_retries)
+        } else {
+            None
+        }
+    }
+
     /// ACK a message to remove it from the pending entries list.
     async fn ack(client: &fred::clients::Client, queue: &str, group: &str, stream_id: &str) {
         let result: Result<(), fred::error::Error> = client.xack(queue, group, stream_id).await;
@@ -404,7 +426,7 @@ impl RedisWorker {
         let payload = Bytes::from(payload_str.as_bytes().to_vec());
         let start = Instant::now();
 
-        let result = match handler(payload).await {
+        let result = match handler(payload.clone()).await {
             Ok(data) => TaskResult {
                 payload: Ok(data),
                 execution_time: start.elapsed().as_secs_f64(),
@@ -414,6 +436,33 @@ impl RedisWorker {
                 execution_time: start.elapsed().as_secs_f64(),
             },
         };
+
+        if result.payload.is_err()
+            && let Some(remaining) = Self::retries_remaining(&labels)
+            && remaining > 0
+        {
+            tracing::warn!(
+                task_name,
+                task_id,
+                remaining = remaining - 1,
+                "retrying failed task"
+            );
+            let mut retry_labels = labels.clone();
+            retry_labels.insert(
+                orchis_core::labels::RETRY_REMAINING.to_owned(),
+                (remaining - 1).to_string(),
+            );
+            let new_id = inner.broker.generate_id();
+            if let Err(e) = inner
+                .broker
+                .dispatch(task_name, &new_id, payload, retry_labels)
+                .await
+            {
+                tracing::error!(task_id, "failed to dispatch retry: {e}");
+            }
+            Self::ack(client, queue, group, stream_id).await;
+            return;
+        }
 
         if let Err(e) = inner.broker.set_result(task_id, result.clone()).await {
             tracing::error!(task_id, "failed to store result: {e}");
