@@ -59,6 +59,7 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
     /// * `task_id`: Identifier of the completed task.
     /// * `labels`: Labels from the completed task's message.
     /// * `result`: The persisted task result.
+    #[tracing::instrument(skip(self, labels, result), fields(pipeline_step))]
     pub async fn post_save(
         &self,
         task_id: &str,
@@ -115,6 +116,7 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
     }
 
     /// Execute the operation at `ctx.current_index`.
+    #[tracing::instrument(skip_all, fields(step_index = ctx.current_index))]
     fn execute_step<'a>(
         &'a self,
         ctx: &'a PipelineContext<B, BB>,
@@ -515,6 +517,7 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
     }
 
     /// Handle completion of a fan-out child task.
+    #[tracing::instrument(skip(self, labels, result))]
     async fn handle_fan_out_child(
         &self,
         task_id: &str,
@@ -888,6 +891,7 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
     }
 
     /// Fetch results for a list of task IDs concurrently.
+    #[tracing::instrument(skip(self), fields(child_count = task_ids.len()))]
     async fn gather_results(
         &self,
         task_ids: &[String],
