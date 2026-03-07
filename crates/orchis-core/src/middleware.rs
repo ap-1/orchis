@@ -26,6 +26,15 @@ use crate::ops::flat_map::FLAT_MAP_LABEL;
 use crate::ops::{self, StepOp};
 use crate::result::TaskResult;
 
+/// State for a single reduce fold iteration.
+struct ReduceFoldState<'a> {
+    item: &'a serde_json::Value,
+    accumulator_json: &'a str,
+    index: usize,
+    total: usize,
+    items_key: &'a str,
+}
+
 /// Core pipeline advancement logic.
 ///
 /// Generic over the broker and barrier backend. Adapter crates are
@@ -72,6 +81,10 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
 
         if labels.contains_key(BARRIER_LABEL) {
             return self.handle_fan_out_child(task_id, labels, result).await;
+        }
+
+        if labels.contains_key(labels::REDUCE_INDEX) {
+            return self.continue_reduce(labels, result).await;
         }
 
         let Some(raw_pipeline) = labels.get(labels::PIPELINE) else {
@@ -446,7 +459,11 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
         self.execute_step(&next_ctx, result).await
     }
 
-    /// Sequentially fold gathered results with a reducer task.
+    /// Start a non-blocking reduce fold.
+    ///
+    /// Stores the gathered items in the result backend, then dispatches
+    /// the first fold task. Subsequent iterations are driven by
+    /// [`continue_reduce`](Self::continue_reduce) via `post_save`.
     async fn execute_reduce(
         &self,
         ctx: &PipelineContext<B, BB>,
@@ -454,48 +471,162 @@ impl<B: Broker, BB: BarrierBackend> PipelineMiddleware<B, BB> {
         result: &TaskResult,
     ) -> Result<(), PipelineError> {
         let items: Vec<serde_json::Value> = serde_json::from_slice(result.expect_data()?)?;
-        let mut accumulator: serde_json::Value = op.initial.clone();
 
-        for item in &items {
-            let pair = serde_json::Value::Array(vec![accumulator, item.clone()]);
-            let payload = serde_json::to_vec(&pair)?;
-            let fold_id = self.broker.generate_id();
+        if items.is_empty() {
+            let final_payload = serde_json::to_vec(&op.initial)?;
+            let acc_result = TaskResult::success(Bytes::from(final_payload));
+            let next_index = ctx.current_index + 1;
+            if next_index >= ctx.steps.len() {
+                self.broker.set_result(&op.task_id, acc_result).await?;
+                return Ok(());
+            }
+            let next_ctx = ctx.at_index(next_index);
+            return self.execute_step(&next_ctx, &acc_result).await;
+        }
 
-            let mut dispatch_labels =
-                self.new_dispatch_labels(&ctx.source_labels, 1 + op.extra_labels.len());
-            dispatch_labels.extend(op.extra_labels.clone());
+        let items_key = format!("_reduce_items:{}", op.task_id);
+        let items_result = TaskResult::success(Bytes::from(serde_json::to_vec(&items)?));
+        self.broker.set_result(&items_key, items_result).await?;
 
-            self.broker
-                .dispatch(
-                    &op.task_name,
-                    &fold_id,
-                    Bytes::from(payload),
-                    dispatch_labels,
-                )
-                .await?;
+        let acc_json = serde_json::to_string(&op.initial)?;
+        let fold = ReduceFoldState {
+            item: &items[0],
+            accumulator_json: &acc_json,
+            index: 0,
+            total: items.len(),
+            items_key: &items_key,
+        };
+        self.dispatch_reduce_fold(ctx, op, &fold).await
+    }
 
-            let fold_result = self.broker.wait_result(&fold_id, None).await?;
-            if fold_result.payload.is_err() {
-                let final_id = ctx.steps.last().expect("steps non-empty").task_id();
-                self.broker.set_result(final_id, fold_result).await?;
-                tracing::warn!("reduce aborted due to task error");
+    /// Dispatch a single reduce fold task.
+    async fn dispatch_reduce_fold(
+        &self,
+        ctx: &PipelineContext<B, BB>,
+        op: &ops::ReduceOp,
+        fold: &ReduceFoldState<'_>,
+    ) -> Result<(), PipelineError> {
+        let acc: serde_json::Value = serde_json::from_str(fold.accumulator_json)?;
+        let pair = serde_json::Value::Array(vec![acc, fold.item.clone()]);
+        let payload = serde_json::to_vec(&pair)?;
+        let fold_id = self.broker.generate_id();
+
+        let mut dispatch_labels =
+            self.new_dispatch_labels(&ctx.source_labels, 8 + op.extra_labels.len());
+        dispatch_labels.insert(labels::PIPELINE.to_owned(), (*ctx.raw_pipeline).to_owned());
+        dispatch_labels.insert(
+            labels::PIPELINE_STEP.to_owned(),
+            ctx.current_index.to_string(),
+        );
+        dispatch_labels.insert(labels::REDUCE_INDEX.to_owned(), fold.index.to_string());
+        dispatch_labels.insert(labels::REDUCE_TOTAL.to_owned(), fold.total.to_string());
+        dispatch_labels.insert(
+            labels::REDUCE_ITEMS_KEY.to_owned(),
+            fold.items_key.to_owned(),
+        );
+        dispatch_labels.extend(op.extra_labels.clone());
+
+        self.broker
+            .dispatch(
+                &op.task_name,
+                &fold_id,
+                Bytes::from(payload),
+                dispatch_labels,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Continue a reduce fold after a fold task completes.
+    ///
+    /// Called from `post_save` when `REDUCE_INDEX` is present in labels.
+    async fn continue_reduce(
+        &self,
+        labels: &HashMap<String, String>,
+        result: &TaskResult,
+    ) -> Result<(), PipelineError> {
+        let raw_pipeline = labels.get(labels::PIPELINE).ok_or(PipelineError::Empty)?;
+        let current_index: usize = labels
+            .get(labels::PIPELINE_STEP)
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| PipelineError::Internal("missing pipeline step in reduce".to_owned()))?;
+        let reduce_index: usize = labels
+            .get(labels::REDUCE_INDEX)
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| PipelineError::Internal("missing reduce index".to_owned()))?;
+        let reduce_total: usize = labels
+            .get(labels::REDUCE_TOTAL)
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| PipelineError::Internal("missing reduce total".to_owned()))?;
+        let items_key = labels
+            .get(labels::REDUCE_ITEMS_KEY)
+            .ok_or_else(|| PipelineError::Internal("missing reduce items key".to_owned()))?;
+
+        if result.payload.is_err() {
+            return self.abort_pipeline(labels, result).await;
+        }
+
+        let accumulator_json = std::str::from_utf8(result.expect_data()?)
+            .map_err(|e| PipelineError::Serialization(e.to_string()))?;
+
+        let next_reduce_index = reduce_index + 1;
+        if next_reduce_index >= reduce_total {
+            let acc_result = TaskResult::success(result.expect_data()?.clone());
+            let steps: Arc<[StepOp]> = ops::deserialize_ops(raw_pipeline)?.into();
+            let raw_pipeline: Arc<str> = Arc::from(raw_pipeline.as_str());
+
+            let next_index = current_index + 1;
+            if next_index >= steps.len() {
+                let reduce_op_id = steps[current_index].task_id();
+                self.broker.set_result(reduce_op_id, acc_result).await?;
                 return Ok(());
             }
 
-            accumulator = serde_json::from_slice(fold_result.expect_data()?)?;
+            let ctx = PipelineContext {
+                broker: Arc::clone(&self.broker),
+                barrier: self.barrier.as_ref().map(Arc::clone),
+                raw_pipeline,
+                steps,
+                current_index: next_index,
+                source_labels: Arc::new(labels.clone()),
+            };
+            return self.execute_step(&ctx, &acc_result).await;
         }
 
-        let final_payload = serde_json::to_vec(&accumulator)?;
-        let acc_result = TaskResult::success(Bytes::from(final_payload));
+        let stored = self.broker.get_result(items_key).await?.ok_or_else(|| {
+            PipelineError::Internal("reduce items expired from result backend".to_owned())
+        })?;
+        let items: Vec<serde_json::Value> = serde_json::from_slice(stored.expect_data()?)?;
+        let next_item = &items[next_reduce_index];
 
-        let next_index = ctx.current_index + 1;
-        if next_index >= ctx.steps.len() {
-            self.broker.set_result(&op.task_id, acc_result).await?;
-            return Ok(());
-        }
+        let steps: Arc<[StepOp]> = ops::deserialize_ops(raw_pipeline)?.into();
+        let raw_pipeline: Arc<str> = Arc::from(raw_pipeline.as_str());
+        let op = match &steps[current_index] {
+            StepOp::Reduce(op) => op.clone(),
+            _ => {
+                return Err(PipelineError::Internal(
+                    "expected ReduceOp at current index".to_owned(),
+                ));
+            }
+        };
 
-        let next_ctx = ctx.at_index(next_index);
-        self.execute_step(&next_ctx, &acc_result).await
+        let ctx = PipelineContext {
+            broker: Arc::clone(&self.broker),
+            barrier: self.barrier.as_ref().map(Arc::clone),
+            raw_pipeline,
+            steps,
+            current_index,
+            source_labels: Arc::new(labels.clone()),
+        };
+
+        let fold = ReduceFoldState {
+            item: next_item,
+            accumulator_json,
+            index: next_reduce_index,
+            total: reduce_total,
+            items_key,
+        };
+        self.dispatch_reduce_fold(&ctx, &op, &fold).await
     }
 
     /// Fire-and-forget dispatch, store empty result immediately.

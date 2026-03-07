@@ -89,19 +89,19 @@ struct WorkerInner {
     handlers: HashMap<String, BoxedHandler>,
 }
 
-/// A worker that consumes tasks from a Redis stream, executes
-/// registered handlers, stores results, and advances pipelines.
+/// Builder for registering task handlers before starting the worker.
 ///
-/// Messages are processed concurrently up to
-/// [`max_concurrency`](WorkerConfig::max_concurrency). Stale messages
-/// from crashed consumers are periodically claimed via XAUTOCLAIM.
-pub struct RedisWorker {
-    inner: Arc<WorkerInner>,
+/// Call [`register`](Self::register) for each task type, then
+/// [`build`](Self::build) to produce a [`RedisWorker`].
+pub struct RedisWorkerBuilder {
+    broker: Arc<RedisBroker>,
+    barrier: Arc<RedisBarrier>,
+    handlers: HashMap<String, BoxedHandler>,
     config: WorkerConfig,
 }
 
-impl RedisWorker {
-    /// Create a new worker.
+impl RedisWorkerBuilder {
+    /// Create a new builder.
     ///
     /// # Arguments
     ///
@@ -109,14 +109,10 @@ impl RedisWorker {
     /// * `barrier`: Barrier backend for fan-out coordination.
     /// * `config`: Worker configuration.
     pub fn new(broker: Arc<RedisBroker>, barrier: Arc<RedisBarrier>, config: WorkerConfig) -> Self {
-        let middleware =
-            PipelineMiddleware::new(Arc::clone(&broker) as Arc<RedisBroker>, Some(barrier));
         Self {
-            inner: Arc::new(WorkerInner {
-                broker,
-                middleware,
-                handlers: HashMap::new(),
-            }),
+            broker,
+            barrier,
+            handlers: HashMap::new(),
             config,
         }
     }
@@ -126,21 +122,48 @@ impl RedisWorker {
     /// The task name comes from `T::NAME`. The closure receives
     /// the deserialized `T::Input` and returns `T::Output`.
     /// Serialization is handled internally.
-    ///
-    /// Must be called before [`run`](Self::run). Panics if the inner
-    /// state is already shared (i.e. `run` was called).
-    pub fn register<T, F, Fut>(&mut self, handler: F)
+    pub fn register<T, F, Fut>(&mut self, handler: F) -> &mut Self
     where
         T: Task,
         F: Fn(T::Input) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = T::Output> + Send + 'static,
     {
-        Arc::get_mut(&mut self.inner)
-            .expect("register must be called before run")
-            .handlers
+        self.handlers
             .insert(T::NAME.to_owned(), wrap_handler::<T, F, Fut>(handler));
+        self
     }
 
+    /// Consume the builder and produce a [`RedisWorker`].
+    pub fn build(self) -> RedisWorker {
+        let middleware = PipelineMiddleware::new(
+            Arc::clone(&self.broker) as Arc<RedisBroker>,
+            Some(self.barrier),
+        );
+        RedisWorker {
+            inner: Arc::new(WorkerInner {
+                broker: self.broker,
+                middleware,
+                handlers: self.handlers,
+            }),
+            config: self.config,
+        }
+    }
+}
+
+/// A worker that consumes tasks from a Redis stream, executes
+/// registered handlers, stores results, and advances pipelines.
+///
+/// Messages are processed concurrently up to
+/// [`max_concurrency`](WorkerConfig::max_concurrency). Stale messages
+/// from crashed consumers are periodically claimed via XAUTOCLAIM.
+///
+/// Construct via [`RedisWorkerBuilder`].
+pub struct RedisWorker {
+    inner: Arc<WorkerInner>,
+    config: WorkerConfig,
+}
+
+impl RedisWorker {
     /// Run the worker loop until the cancellation token is triggered.
     ///
     /// Creates the consumer group if it doesn't exist, then

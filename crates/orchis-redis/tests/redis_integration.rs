@@ -15,7 +15,7 @@ use orchis_core::barrier::BarrierBackend;
 use orchis_core::broker::Broker;
 use orchis_core::result::TaskResult;
 use orchis_core::task::Task;
-use orchis_redis::{RedisBarrier, RedisBroker, RedisConfig, RedisWorker, WorkerConfig};
+use orchis_redis::{RedisBarrier, RedisBroker, RedisConfig, RedisWorkerBuilder, WorkerConfig};
 use serde::{Deserialize, Serialize};
 
 fn should_run() -> bool {
@@ -293,10 +293,11 @@ async fn worker_processes_dispatched_task() {
         ..WorkerConfig::default()
     };
 
-    let mut worker = RedisWorker::new(Arc::clone(&broker), barrier, worker_config);
-    worker.register::<DoubleTask, _, _>(
+    let mut builder = RedisWorkerBuilder::new(Arc::clone(&broker), barrier, worker_config);
+    builder.register::<DoubleTask, _, _>(
         |input: DoubleInput| async move { DoubleOutput(input.0 * 2) },
     );
+    let worker = builder.build();
 
     let task_id = broker.generate_id();
     let payload = serde_json::to_vec(&DoubleInput(21)).unwrap();

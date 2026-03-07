@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use orchis_core::Pipeline;
 use orchis_core::task::Task;
-use orchis_redis::{RedisBarrier, RedisBroker, RedisConfig, RedisWorker, WorkerConfig};
+use orchis_redis::{RedisBarrier, RedisBroker, RedisConfig, RedisWorkerBuilder, WorkerConfig};
 use serde::{Deserialize, Serialize};
 
 fn should_run() -> bool {
@@ -133,7 +133,7 @@ impl Task for Noop {
     const NAME: &'static str = "pipeline_test::noop";
 }
 
-fn register_all(worker: &mut RedisWorker) {
+fn register_all(worker: &mut RedisWorkerBuilder) {
     worker.register::<Produce, _, _>(|_| async { vec![Num(1), Num(2), Num(3)] });
     worker.register::<Double, _, _>(|n: Num| async move { Num(n.0 * 2) });
     worker
@@ -164,15 +164,17 @@ async fn run_pipeline<T: serde::de::DeserializeOwned>(
     broker: &Arc<RedisBroker>,
     barrier: &Arc<RedisBarrier>,
     worker_config: WorkerConfig,
-    register: impl FnOnce(&mut RedisWorker),
+    register: impl FnOnce(&mut RedisWorkerBuilder),
     build: impl FnOnce(
         Arc<RedisBroker>,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = orchis_core::TaskHandle<RedisBroker, T>> + Send>,
     >,
 ) -> T {
-    let mut worker = RedisWorker::new(Arc::clone(broker), Arc::clone(barrier), worker_config);
-    register(&mut worker);
+    let mut builder =
+        RedisWorkerBuilder::new(Arc::clone(broker), Arc::clone(barrier), worker_config);
+    register(&mut builder);
+    let worker = builder.build();
 
     let handle = build(Arc::clone(broker)).await;
 
@@ -299,8 +301,8 @@ async fn retry_on_failure() {
 
     // FailOnce panics on first call, succeeds on second.
     // With retry(1), the pipeline should succeed.
-    let mut worker = RedisWorker::new(Arc::clone(&broker), Arc::clone(&barrier), wc);
-    register_all(&mut worker);
+    let mut builder = RedisWorkerBuilder::new(Arc::clone(&broker), Arc::clone(&barrier), wc);
+    register_all(&mut builder);
 
     let handle = Pipeline::new(Arc::clone(&broker))
         .first::<Double>()
@@ -310,6 +312,7 @@ async fn retry_on_failure() {
         .await
         .unwrap();
 
+    let worker = builder.build();
     let shutdown = tokio_util::sync::CancellationToken::new();
     let shutdown_clone = shutdown.clone();
     let worker_handle = tokio::spawn(async move { worker.run(shutdown_clone).await });
@@ -463,8 +466,8 @@ async fn error_propagation() {
 
     let (broker, barrier, wc) = setup().await;
 
-    let mut worker = RedisWorker::new(Arc::clone(&broker), Arc::clone(&barrier), wc);
-    register_all(&mut worker);
+    let mut builder = RedisWorkerBuilder::new(Arc::clone(&broker), Arc::clone(&barrier), wc);
+    register_all(&mut builder);
 
     let handle = Pipeline::new(Arc::clone(&broker))
         .first::<Double>()
@@ -474,6 +477,7 @@ async fn error_propagation() {
         .await
         .unwrap();
 
+    let worker = builder.build();
     let shutdown = tokio_util::sync::CancellationToken::new();
     let shutdown_clone = shutdown.clone();
     let worker_handle = tokio::spawn(async move { worker.run(shutdown_clone).await });
@@ -501,9 +505,9 @@ async fn fan_out_with_sink_terminator() {
 
     let (broker, barrier, wc) = setup().await;
 
-    let mut worker = RedisWorker::new(Arc::clone(&broker), Arc::clone(&barrier), wc);
-    register_all(&mut worker);
-    worker.register::<SinkTarget, _, _>(|_: Num| async {});
+    let mut builder = RedisWorkerBuilder::new(Arc::clone(&broker), Arc::clone(&barrier), wc);
+    register_all(&mut builder);
+    builder.register::<SinkTarget, _, _>(|_: Num| async {});
 
     let handle = Pipeline::new(Arc::clone(&broker))
         .first::<Produce>()
@@ -514,6 +518,7 @@ async fn fan_out_with_sink_terminator() {
         .await
         .unwrap();
 
+    let worker = builder.build();
     let shutdown = tokio_util::sync::CancellationToken::new();
     let shutdown_clone = shutdown.clone();
     let worker_handle = tokio::spawn(async move { worker.run(shutdown_clone).await });
@@ -619,9 +624,9 @@ async fn retry_dispatch_path() {
         const NAME: &'static str = "pipeline_test::retry_target";
     }
 
-    let mut worker = RedisWorker::new(Arc::clone(&broker), Arc::clone(&barrier), wc);
-    register_all(&mut worker);
-    worker.register::<RetryTarget, _, _>(move |n: Num| {
+    let mut builder = RedisWorkerBuilder::new(Arc::clone(&broker), Arc::clone(&barrier), wc);
+    register_all(&mut builder);
+    builder.register::<RetryTarget, _, _>(move |n: Num| {
         let count = Arc::clone(&call_count_clone);
         async move {
             let attempt = count.fetch_add(1, Ordering::Relaxed);
@@ -640,6 +645,7 @@ async fn retry_dispatch_path() {
         .await
         .unwrap();
 
+    let worker = builder.build();
     let shutdown = tokio_util::sync::CancellationToken::new();
     let shutdown_clone = shutdown.clone();
     let worker_handle = tokio::spawn(async move { worker.run(shutdown_clone).await });
