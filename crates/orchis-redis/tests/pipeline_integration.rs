@@ -182,10 +182,7 @@ async fn run_pipeline<T: serde::de::DeserializeOwned>(
     let shutdown_clone = shutdown.clone();
     let worker_handle = tokio::spawn(async move { worker.run(shutdown_clone).await });
 
-    let result = handle
-        .wait_result_timeout(Duration::from_secs(10))
-        .await
-        .unwrap();
+    let result = handle.wait_result(Duration::from_secs(10)).await.unwrap();
 
     shutdown.cancel();
     let _ = worker_handle.await;
@@ -317,7 +314,7 @@ async fn retry_on_failure() {
     let shutdown_clone = shutdown.clone();
     let worker_handle = tokio::spawn(async move { worker.run(shutdown_clone).await });
 
-    let result: Result<Num, _> = handle.wait_result_timeout(Duration::from_secs(10)).await;
+    let result: Result<Num, _> = handle.wait_result(Duration::from_secs(10)).await;
 
     shutdown.cancel();
     let _ = worker_handle.await;
@@ -482,7 +479,7 @@ async fn error_propagation() {
     let shutdown_clone = shutdown.clone();
     let worker_handle = tokio::spawn(async move { worker.run(shutdown_clone).await });
 
-    let result: Result<Num, _> = handle.wait_result_timeout(Duration::from_secs(5)).await;
+    let result: Result<Num, _> = handle.wait_result(Duration::from_secs(5)).await;
 
     shutdown.cancel();
     let _ = worker_handle.await;
@@ -523,10 +520,7 @@ async fn fan_out_with_sink_terminator() {
     let shutdown_clone = shutdown.clone();
     let worker_handle = tokio::spawn(async move { worker.run(shutdown_clone).await });
 
-    let _: () = handle
-        .wait_result_timeout(Duration::from_secs(10))
-        .await
-        .unwrap();
+    let _: () = handle.wait_result(Duration::from_secs(10)).await.unwrap();
 
     shutdown.cancel();
     let _ = worker_handle.await;
@@ -650,10 +644,7 @@ async fn retry_dispatch_path() {
     let shutdown_clone = shutdown.clone();
     let worker_handle = tokio::spawn(async move { worker.run(shutdown_clone).await });
 
-    let result: Num = handle
-        .wait_result_timeout(Duration::from_secs(15))
-        .await
-        .unwrap();
+    let result: Num = handle.wait_result(Duration::from_secs(15)).await.unwrap();
 
     shutdown.cancel();
     let _ = worker_handle.await;

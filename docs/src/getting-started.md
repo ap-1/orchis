@@ -53,27 +53,28 @@ let handle = Pipeline::new(Arc::clone(&broker))
     .dispatch(())
     .await?;
 
-let report: String = handle.wait_result().await?;
+let report: String = handle.wait_result(Duration::from_secs(60)).await?;
 ```
 
 ## Run a worker
 
 ```rust
-use orchis_redis::{RedisWorker, WorkerConfig};
+use orchis_redis::{RedisWorkerBuilder, WorkerConfig};
 
-let mut worker = RedisWorker::new(broker, barrier, WorkerConfig::default());
+let mut builder = RedisWorkerBuilder::new(broker, barrier, WorkerConfig::default());
 
-worker.register::<FindTargets>(|_| async {
+builder.register::<FindTargets>(|_| async {
     vec![Target { url: "https://example.com".into() }]
 });
 
-worker.register::<ScanTarget>(|target| async move {
+builder.register::<ScanTarget>(|target| async move {
     ScanResult { findings: vec![format!("scanned {}", target.url)] }
 });
 
-worker.register::<GenerateReport>(|results| async move {
+builder.register::<GenerateReport>(|results| async move {
     format!("{} targets scanned", results.len())
 });
 
+let worker = builder.build();
 worker.run(shutdown_token).await?;
 ```

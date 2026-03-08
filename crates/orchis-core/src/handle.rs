@@ -35,40 +35,23 @@ impl<B: Broker, T> TaskHandle<B, T> {
         &self.task_id
     }
 
-    /// Wait indefinitely for the pipeline to complete and deserialise
-    /// the result.
+    /// Wait for the pipeline to complete and deserialise the result.
     ///
     /// # Errors
     ///
+    /// * [`PipelineError::Broker`] wrapping [`BrokerError::Timeout`](crate::error::BrokerError::Timeout) if the deadline elapses.
     /// * [`PipelineError::TaskFailed`] if a task in the pipeline errored.
     /// * [`PipelineError::Broker`] on broker communication failure.
     /// * [`PipelineError::Serialization`] if the result cannot be
     ///   deserialised into `T`.
-    pub async fn wait_result(self) -> Result<T, PipelineError>
+    pub async fn wait_result(self, timeout: Duration) -> Result<T, PipelineError>
     where
         T: DeserializeOwned,
     {
-        self.wait_impl(None).await
-    }
-
-    /// Wait for the pipeline to complete with a timeout.
-    ///
-    /// # Errors
-    ///
-    /// Same as [`wait_result`](Self::wait_result), plus
-    /// [`PipelineError::Broker`] wrapping [`BrokerError::Timeout`](crate::error::BrokerError::Timeout).
-    pub async fn wait_result_timeout(self, timeout: Duration) -> Result<T, PipelineError>
-    where
-        T: DeserializeOwned,
-    {
-        self.wait_impl(Some(timeout)).await
-    }
-
-    async fn wait_impl(self, timeout: Option<Duration>) -> Result<T, PipelineError>
-    where
-        T: DeserializeOwned,
-    {
-        let result = self.broker.wait_result(&self.task_id, timeout).await?;
+        let result = self
+            .broker
+            .wait_result(&self.task_id, Some(timeout))
+            .await?;
         match result.payload {
             Ok(data) => Ok(serde_json::from_slice(&data)?),
             Err(message) => Err(PipelineError::TaskFailed(message)),

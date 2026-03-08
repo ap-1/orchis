@@ -12,7 +12,7 @@ let handle = Pipeline::new(broker)
     .dispatch(())
     .await?;
 
-let report: Report = handle.wait_result().await?;
+let report: Report = handle.wait_result(Duration::from_secs(60)).await?;
 ```
 
 The pipeline above finds targets, scans each one in parallel across workers, gathers the results, and generates a report. If `ScanTarget` expects a `Target` but `FindTargets` returns a `Vec<String>`, the code won't compile.
