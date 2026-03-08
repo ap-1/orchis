@@ -8,34 +8,34 @@ Model the decision as an enum and dispatch both the decision and the execution a
 
 ```rust
 #[derive(Serialize, Deserialize)]
-enum ScanStrategy {
-    Deep(DeepScanInput),
-    Shallow(ShallowScanInput),
+enum ProcessingStrategy {
+    Full(FullProcessingInput),
+    Quick(QuickProcessingInput),
 }
 
-struct DecideScanStrategy;
-impl Task for DecideScanStrategy {
-    type Input = Target;
-    type Output = ScanStrategy;
-    const NAME: &'static str = "scanner::decide_strategy";
+struct DecideStrategy;
+impl Task for DecideStrategy {
+    type Input = Page;
+    type Output = ProcessingStrategy;
+    const NAME: &'static str = "processor::decide_strategy";
 }
 
-struct ExecuteScan;
-impl Task for ExecuteScan {
-    type Input = ScanStrategy;
-    type Output = ScanResult;
-    const NAME: &'static str = "scanner::execute_scan";
+struct ExecuteProcessing;
+impl Task for ExecuteProcessing {
+    type Input = ProcessingStrategy;
+    type Output = ProcessingResult;
+    const NAME: &'static str = "processor::execute";
 }
 ```
 
 The decision task returns the enum variant:
 
 ```rust
-worker.register::<DecideScanStrategy>(|target| async move {
-    if target.is_high_priority {
-        ScanStrategy::Deep(DeepScanInput { target, depth: 5 })
+worker.register::<DecideStrategy>(|page| async move {
+    if page.is_high_priority {
+        ProcessingStrategy::Full(FullProcessingInput { page, depth: 5 })
     } else {
-        ScanStrategy::Shallow(ShallowScanInput { target })
+        ProcessingStrategy::Quick(QuickProcessingInput { page })
     }
 });
 ```
@@ -43,10 +43,10 @@ worker.register::<DecideScanStrategy>(|target| async move {
 The execution task matches on it:
 
 ```rust
-worker.register::<ExecuteScan>(|strategy| async move {
+worker.register::<ExecuteProcessing>(|strategy| async move {
     match strategy {
-        ScanStrategy::Deep(input) => deep_scan(input).await,
-        ScanStrategy::Shallow(input) => shallow_scan(input).await,
+        ProcessingStrategy::Full(input) => full_process(input).await,
+        ProcessingStrategy::Quick(input) => quick_process(input).await,
     }
 });
 ```
@@ -55,17 +55,17 @@ The pipeline stays linear:
 
 ```rust
 Pipeline::new(broker)
-    .first::<DecideScanStrategy>()
-    .then::<ExecuteScan>()
-    .dispatch(target)
+    .first::<DecideStrategy>()
+    .then::<ExecuteProcessing>()
+    .dispatch(page)
     .await?;
 ```
 
 ## Why this works
 
-- The pipeline type signature is unambiguous: `Target -> ScanStrategy -> ScanResult`.
+- The pipeline type signature is unambiguous: `Page -> ProcessingStrategy -> ProcessingResult`.
 - The branching logic lives in the task where it can access runtime context.
-- Both branches produce the same output type (`ScanResult`), so the pipeline can continue.
+- Both branches produce the same output type (`ProcessingResult`), so the pipeline can continue.
 - If the branches need different output types, wrap them in an enum and let the next task handle it the same way.
 
 ## Partitioning items by type
@@ -74,49 +74,49 @@ A common variant: a fan-out produces items of different categories, and you want
 
 ```rust
 #[derive(Serialize, Deserialize)]
-enum Asset {
-    WebApp(WebAppData),
-    Api(ApiData),
-    DnsRecord(DnsData),
+enum ContentItem {
+    Text(TextData),
+    Image(ImageData),
+    Video(VideoData),
 }
 
 #[derive(Serialize, Deserialize)]
-struct AssetResult { /* ... */ }
+struct ContentResult { /* ... */ }
 
-struct ProcessAsset;
-impl Task for ProcessAsset {
-    type Input = Asset;
-    type Output = AssetResult;
-    const NAME: &'static str = "scanner::process_asset";
+struct ProcessContent;
+impl Task for ProcessContent {
+    type Input = ContentItem;
+    type Output = ContentResult;
+    const NAME: &'static str = "processor::process_content";
 }
 ```
 
 The handler routes internally:
 
 ```rust
-worker.register::<ProcessAsset>(|asset| async move {
-    match asset {
-        Asset::WebApp(data) => scan_webapp(data).await,
-        Asset::Api(data) => scan_api(data).await,
-        Asset::DnsRecord(data) => scan_dns(data).await,
+worker.register::<ProcessContent>(|item| async move {
+    match item {
+        ContentItem::Text(data) => process_text(data).await,
+        ContentItem::Image(data) => process_image(data).await,
+        ContentItem::Video(data) => process_video(data).await,
     }
 });
 ```
 
-The pipeline fans out over mixed assets, and each item is routed to the right handler logic:
+The pipeline fans out over mixed content items, and each item is routed to the right handler logic:
 
 ```rust
 Pipeline::new(broker)
-    .first::<DiscoverAssets>()   // () -> Vec<Asset>
+    .first::<FetchContentItems>()  // () -> Vec<ContentItem>
     .fan_out()
-    .then::<ProcessAsset>()      // Asset -> AssetResult (routes internally)
+    .then::<ProcessContent>()      // ContentItem -> ContentResult (routes internally)
     .collect()
     .then::<AggregateResults>()
     .dispatch(())
     .await?;
 ```
 
-This is simpler than a pipeline-level partition because the routing happens at runtime inside the task, the type signature stays clean (`Asset -> AssetResult`), and all branches produce the same output type for collect.
+This is simpler than a pipeline-level partition because the routing happens at runtime inside the task, the type signature stays clean (`ContentItem -> ContentResult`), and all branches produce the same output type for collect.
 
 ## When you need truly separate pipelines
 
@@ -124,17 +124,16 @@ If two branches have completely different downstream processing (different numbe
 
 ```rust
 worker.register::<Router>(|input| async move {
-    if input.needs_deep_scan {
-        // Dispatch a separate pipeline for deep scanning
+    if input.needs_full_processing {
         Pipeline::new(broker.clone())
-            .first::<DeepScan>()
-            .then::<DeepAnalysis>()
+            .first::<FullProcess>()
+            .then::<DetailedAnalysis>()
             .dispatch(input)
             .await
             .unwrap();
     } else {
         Pipeline::new(broker.clone())
-            .first::<ShallowScan>()
+            .first::<QuickProcess>()
             .dispatch(input)
             .await
             .unwrap();

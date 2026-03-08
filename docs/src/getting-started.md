@@ -7,28 +7,28 @@ use orchis_core::Task;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
-struct Target { url: String }
+struct Page { url: String }
 
 #[derive(Serialize, Deserialize)]
-struct ScanResult { findings: Vec<String> }
+struct PageContent { entries: Vec<String> }
 
-struct FindTargets;
-impl Task for FindTargets {
+struct FetchPages;
+impl Task for FetchPages {
     type Input = ();
-    type Output = Vec<Target>;
-    const NAME: &'static str = "recon::find_targets";
+    type Output = Vec<Page>;
+    const NAME: &'static str = "processor::fetch_pages";
 }
 
-struct ScanTarget;
-impl Task for ScanTarget {
-    type Input = Target;
-    type Output = ScanResult;
-    const NAME: &'static str = "scanner::scan_target";
+struct ExtractContent;
+impl Task for ExtractContent {
+    type Input = Page;
+    type Output = PageContent;
+    const NAME: &'static str = "processor::extract_content";
 }
 
 struct GenerateReport;
 impl Task for GenerateReport {
-    type Input = Vec<ScanResult>;
+    type Input = Vec<PageContent>;
     type Output = String;
     const NAME: &'static str = "report::generate";
 }
@@ -45,9 +45,9 @@ let broker = Arc::new(RedisBroker::connect(config.clone()).await?);
 let barrier = Arc::new(RedisBarrier::new(broker.client(), config));
 
 let handle = Pipeline::new(Arc::clone(&broker))
-    .first::<FindTargets>()
+    .first::<FetchPages>()
     .fan_out()
-    .then::<ScanTarget>()
+    .then::<ExtractContent>()
     .collect()
     .then::<GenerateReport>()
     .dispatch(())
@@ -63,16 +63,16 @@ use orchis_redis::{RedisWorkerBuilder, WorkerConfig};
 
 let mut builder = RedisWorkerBuilder::new(broker, barrier, WorkerConfig::default());
 
-builder.register::<FindTargets>(|_| async {
-    vec![Target { url: "https://example.com".into() }]
+builder.register::<FetchPages>(|_| async {
+    vec![Page { url: "https://example.com".into() }]
 });
 
-builder.register::<ScanTarget>(|target| async move {
-    ScanResult { findings: vec![format!("scanned {}", target.url)] }
+builder.register::<ExtractContent>(|page| async move {
+    PageContent { entries: vec![format!("processed {}", page.url)] }
 });
 
 builder.register::<GenerateReport>(|results| async move {
-    format!("{} targets scanned", results.len())
+    format!("{} pages processed", results.len())
 });
 
 let worker = builder.build();

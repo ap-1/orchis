@@ -5,19 +5,19 @@
 A task is a unit of work with a known input type, output type, and name. Tasks run on remote workers, not in the pipeline builder. The `Task` trait captures the type signature at compile time:
 
 ```rust
-struct ScanTarget;
-impl Task for ScanTarget {
-    type Input = Target;
-    type Output = ScanResult;
-    const NAME: &'static str = "scanner::scan_target";
+struct ExtractContent;
+impl Task for ExtractContent {
+    type Input = Page;
+    type Output = PageContent;
+    const NAME: &'static str = "processor::extract_content";
 }
 ```
 
 The `orchis-macros` crate provides `#[task]` to generate this from a function:
 
 ```rust
-#[orchis::task("scanner::scan_target")]
-async fn scan_target(input: Target) -> ScanResult {
+#[orchis::task("processor::extract_content")]
+async fn extract_content(input: Page) -> PageContent {
     // ...
 }
 ```

@@ -18,8 +18,8 @@ use super::sequential::Sequential;
 ///
 /// ```ignore
 /// let handle = Pipeline::new(broker)
-///     .first::<FindTargets>()
-///     .then::<ProcessResults>()
+///     .first::<FetchPages>()
+///     .then::<TransformContent>()
 ///     .dispatch(())
 ///     .await?;
 /// ```

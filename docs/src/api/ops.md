@@ -42,7 +42,7 @@ Like `fan_out`, but groups items into fixed-size batches before dispatching. Eac
 ```rust
 .first::<FindUrls>()              // () -> Vec<Url>
 .fan_out_chunked::<Url>(100)      // dispatches one child per chunk of 100
-.then::<ScanUrlBatch>()           // Vec<Url> -> BatchResult
+.then::<ProcessUrlBatch>()        // Vec<Url> -> BatchResult
 .collect()                        // Vec<BatchResult>
 ```
 

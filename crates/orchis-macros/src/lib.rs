@@ -5,8 +5,8 @@
 //! ```ignore
 //! use orchis_macros::task;
 //!
-//! #[task("scanner::scan_target")]
-//! async fn scan_target(input: Target) -> ScanResult {
+//! #[task("processor::extract_content")]
+//! async fn extract_content(input: Page) -> PageContent {
 //!     // ...
 //! }
 //! ```
@@ -14,15 +14,15 @@
 //! Expands to:
 //!
 //! ```ignore
-//! async fn scan_target(input: Target) -> ScanResult {
+//! async fn extract_content(input: Page) -> PageContent {
 //!     // ...
 //! }
 //!
-//! struct ScanTargetTask;
-//! impl orchis_core::Task for ScanTargetTask {
-//!     type Input = Target;
-//!     type Output = ScanResult;
-//!     const NAME: &'static str = "scanner::scan_target";
+//! struct ExtractContentTask;
+//! impl orchis_core::Task for ExtractContentTask {
+//!     type Input = Page;
+//!     type Output = PageContent;
+//!     const NAME: &'static str = "processor::extract_content";
 //! }
 //! ```
 

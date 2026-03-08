@@ -6,8 +6,8 @@ license.workspace = true
 publish = false
 
 [[bin]]
-name = "scanner"
-path = "scanner.rs"
+name = "pipeline-demo"
+path = "pipeline_demo.rs"
 
 [dependencies]
 orchis-core = { path = "../crates/orchis-core" }

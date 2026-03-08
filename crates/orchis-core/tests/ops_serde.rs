@@ -18,7 +18,7 @@ fn labels(pairs: &[(&str, &str)]) -> HashMap<String, String> {
 fn then_op_round_trip() {
     let op = StepOp::Then(ThenOp {
         task_id: "tid-1".to_owned(),
-        task_name: "app::scan".to_owned(),
+        task_name: "app::process".to_owned(),
         retry: None,
         extra_labels: labels(&[("queue", "fast")]),
     });

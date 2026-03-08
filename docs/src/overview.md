@@ -4,18 +4,18 @@ Orchis is a Rust library for building typed pipelines over distributed task queu
 
 ```rust
 let handle = Pipeline::new(broker)
-    .first::<FindTargets>()
+    .first::<FetchPages>()
     .fan_out()
-    .then::<ScanTarget>()
+    .then::<ExtractContent>()
     .collect()
-    .then::<GenerateReport>()
+    .then::<GenerateSummary>()
     .dispatch(())
     .await?;
 
-let report: Report = handle.wait_result(Duration::from_secs(60)).await?;
+let summary: Summary = handle.wait_result(Duration::from_secs(60)).await?;
 ```
 
-The pipeline above finds targets, scans each one in parallel across workers, gathers the results, and generates a report. If `ScanTarget` expects a `Target` but `FindTargets` returns a `Vec<String>`, the code won't compile.
+The pipeline above fetches pages, extracts content from each one in parallel across workers, gathers the results, and generates a summary. If `ExtractContent` expects a `Page` but `FetchPages` returns a `Vec<String>`, the code won't compile.
 
 ## Crates
 

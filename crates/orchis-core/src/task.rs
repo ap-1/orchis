@@ -17,21 +17,21 @@ use serde::de::DeserializeOwned;
 /// use serde::{Deserialize, Serialize};
 ///
 /// #[derive(Serialize, Deserialize)]
-/// struct Target {
+/// struct Page {
 ///     url: String,
 /// }
 ///
 /// #[derive(Serialize, Deserialize)]
-/// struct ScanResult {
-///     findings: Vec<String>,
+/// struct PageContent {
+///     entries: Vec<String>,
 /// }
 ///
-/// struct ScanTargetTask;
+/// struct ExtractContentTask;
 ///
-/// impl Task for ScanTargetTask {
-///     type Input = Target;
-///     type Output = ScanResult;
-///     const NAME: &'static str = "scanner::scan_target";
+/// impl Task for ExtractContentTask {
+///     type Input = Page;
+///     type Output = PageContent;
+///     const NAME: &'static str = "processor::extract_content";
 /// }
 /// ```
 pub trait Task: Send + Sync + 'static {

@@ -12,9 +12,9 @@ A chunked fan-out groups items into fixed-size batches and dispatches one task p
 Pipeline::new(broker)
     .first::<FindUrls>()              // () -> Vec<Url>
     .fan_out_chunked::<Url>(100)      // Vec<Url> -> chunks of Vec<Url>
-    .then::<ScanUrlBatch>()           // Vec<Url> -> Vec<ScanResult>
-    .collect()                        // Vec<Vec<ScanResult>>
-    .then::<Flatten>()                // Vec<Vec<ScanResult>> -> Vec<ScanResult>
+    .then::<ProcessUrlBatch>()        // Vec<Url> -> Vec<PageResult>
+    .collect()                        // Vec<Vec<PageResult>>
+    .then::<Flatten>()                // Vec<Vec<PageResult>> -> Vec<PageResult>
     .dispatch(())
     .await?;
 ```
