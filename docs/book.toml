@@ -1,6 +1,6 @@
 [book]
 title = "Orchis"
-authors = ["Anish Pallati"]
+authors = []
 language = "en"
 src = "src"
 
